@@ -2,3 +2,6 @@
 	path = vendor/iree
 	url = https://github.com/iree-org/iree
 	ignore = dirty
+[submodule "vendor/cjson"]
+	path = vendor/cjson
+	url = https://github.com/davegamble/cjson

@@ -37,13 +37,6 @@ OBJS      = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PROJ_SRCS))
 TEST_SRCS = $(wildcard tests/*.c)
 TEST_OBJS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(TEST_SRCS))
 
-# ── Generated sources ───────────────────────────────────────────────────────
-GENERATED = src/olmoe/tokenizer_data.inc
-
-$(GENERATED): models/OLMoE-1B-7B-0924-Instruct/tokenizer.json scripts/generate_tokenizer_data.py
-	@echo "==> Generating $@"
-	python3 scripts/generate_tokenizer_data.py models/OLMoE-1B-7B-0924-Instruct/tokenizer.json $@
-
 .PHONY: all clean distclean prepare test iree
 
 all: prepare $(IREE_STAMP) $(BUILD_DIR)/main
@@ -78,8 +71,6 @@ iree: $(IREE_STAMP)
 # ── Compile project sources ─────────────────────────────────────────────────
 $(BUILD_DIR)/src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
-
-$(BUILD_DIR)/src/olmoe/tokenizer.o: $(GENERATED)
 
 $(BUILD_DIR)/tests/%.o: tests/%.c
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
