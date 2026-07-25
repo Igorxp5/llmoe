@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +6,44 @@
 #include "olmoe/engine/engine.h"
 
 #include "test_engine.h"
+
+/* File-local BF16 utilities, used only by test_input_ln_matches_scalar so
+ * both the test's weights and its scalar reference share the same BF16
+ * rounding. Round-to-nearest-even, matching the on-disk format. */
+static olmoe_bf16_t f32_to_bf16(float f)
+{
+    uint32_t u;
+    memcpy(&u, &f, sizeof u);
+    uint32_t lsb = (u >> 16) & 1;
+    uint32_t rounding_bias = 0x7fff + lsb;
+    uint32_t rounded = u + rounding_bias;
+    return (olmoe_bf16_t)(rounded >> 16);
+}
+
+static float bf16_to_f32(olmoe_bf16_t b)
+{
+    uint32_t u = (uint32_t)b << 16;
+    float f;
+    memcpy(&f, &u, sizeof f);
+    return f;
+}
+
+/* Pure-C scalar RMSNorm using the identical BF16->FP32 weight promotion as
+ * the SIMD impl; the only divergence expected is FP32 round-off. */
+static void scalar_input_ln(const olmoe_bf16_t *w, const olmoe_act_t *x,
+                            size_t seq_len, olmoe_act_t *out)
+{
+    const float eps = 1e-5f;
+    for (size_t i = 0; i < seq_len; ++i) {
+        const olmoe_act_t *xr = x + i * OLMOE_HIDDEN;
+        olmoe_act_t *or_ = out + i * OLMOE_HIDDEN;
+        float ss = 0.0f;
+        for (size_t k = 0; k < OLMOE_HIDDEN; ++k) ss += xr[k] * xr[k];
+        float scale = 1.0f / sqrtf(ss / (float)OLMOE_HIDDEN + eps);
+        for (size_t k = 0; k < OLMOE_HIDDEN; ++k)
+            or_[k] = xr[k] * scale * bf16_to_f32(w[k]);
+    }
+}
 
 /* ---------- checks ------------------------------------------------------ */
 
@@ -84,6 +123,9 @@ static int test_null_input_returns_err(void)
     if (olmoe_expert_gate_forward(NULL, s.hidden_in, 1, s.expert_in) != OLMOE_ERR_NULL) {
         printf("FAIL: expert_gate_forward(e=NULL)\n"); ++failed;
     }
+    if (olmoe_input_ln_forward(NULL, s.hidden_in, 1, s.hidden_out) != OLMOE_ERR_NULL) {
+        printf("FAIL: input_ln_forward(w=NULL)\n"); ++failed;
+    }
     olmoe_scratch_free(&s);
     if (!failed) printf("PASS: NULL inputs return ERR_NULL\n");
     return failed;
@@ -105,6 +147,9 @@ static int test_empty_seq_returns_ok(void)
     }
     if (olmoe_q_proj_forward(NULL, NULL, 0, NULL) != OLMOE_OK) {
         printf("FAIL: q_proj_forward(seq=0) should short-circuit\n"); ++failed;
+    }
+    if (olmoe_input_ln_forward(NULL, NULL, 0, NULL) != OLMOE_OK) {
+        printf("FAIL: input_ln_forward(seq=0) should short-circuit\n"); ++failed;
     }
     olmoe_scratch_free(&s);
     if (!failed) printf("PASS: empty seq short-circuits to OK\n");
@@ -154,6 +199,51 @@ static int test_forward_oversize_seq_returns_shape(void)
     return failed;
 }
 
+/* olmoe_input_ln_forward: deterministic + random rows compared against an
+ * in-test pure-C scalar RMSNorm that promotes the same BF16 weights, so the
+ * only divergence is FP32 SIMD-vs-scalar round-off. */
+static int test_input_ln_matches_scalar(void)
+{
+    enum { ROWS = 3 };
+    olmoe_bf16_t w[OLMOE_HIDDEN];
+    olmoe_act_t x[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t got[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t want[ROWS * OLMOE_HIDDEN];
+
+    /* Weights: ramp 1..hidden so every lane is distinct. */
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) w[k] = f32_to_bf16((float)(k + 1));
+
+    /* Row 0: constant 1. Row 1: alternating +/-1. Row 2: pseudo-random
+     * via a cheap LCG (no libc dependency). */
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) x[k] = 1.0f;
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) x[OLMOE_HIDDEN + k] = (k & 1) ? -1.0f : 1.0f;
+    unsigned int rng = 0xdeadbeefu;
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) {
+        rng = rng * 1664525u + 1013904223u;
+        x[2 * OLMOE_HIDDEN + k] = (float)((int)rng % 1001) / 500.0f - 1.0f;
+    }
+
+    int failed = 0;
+    olmoe_status_t st = olmoe_input_ln_forward(w, x, ROWS, got);
+    if (st != OLMOE_OK) {
+        printf("FAIL: input_ln_forward -> %d (want OK)\n", st);
+        ++failed;
+    }
+    scalar_input_ln(w, x, ROWS, want);
+
+    /* SIMD and scalar differ only by FP32 round-off; rtol 1e-4, atol 1e-5. */
+    for (size_t i = 0; i < ROWS * OLMOE_HIDDEN && !failed; ++i) {
+        float a = got[i], b = want[i];
+        float diff = fabsf(a - b);
+        if (diff > 1e-5f && diff > 1e-4f * fabsf(b)) {
+            printf("FAIL: input_ln lane %zu got=%.7f want=%.7f\n", i, a, b);
+            ++failed;
+        }
+    }
+    if (!failed) printf("PASS: input_ln_forward matches scalar RMSNorm\n");
+    return failed;
+}
+
 /* ---------- dispatcher --------------------------------------------------- */
 
 int test_engine_stubs_pass(void)
@@ -166,5 +256,6 @@ int test_engine_stubs_pass(void)
     failed += test_empty_seq_returns_ok();
     failed += test_forward_stub_returns_ok();
     failed += test_forward_oversize_seq_returns_shape();
+    failed += test_input_ln_matches_scalar();
     return failed;
 }
