@@ -2,7 +2,8 @@ CC       = gcc
 CFLAGS   = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
            -Wno-type-limits -Wno-unused-function \
            -fPIC -ffunction-sections -fdata-sections \
-           -g -O2
+           -g -O2 \
+           -DIREE_ALLOCATOR_SYSTEM_CTL=iree_allocator_libc_ctl
 
 # ── IREE installation (built via CMake) ──────────────────────────────────────
 IREE_SRC_DIR  = vendor/iree/runtime/src
@@ -23,10 +24,11 @@ IREE_LIBS  = -Wl,--start-group \
              $(shell find $(BUILD_DIR)/iree-build/build_tools/third_party/flatcc -name 'libflatcc*.a' 2>/dev/null | sort) \
              -Wl,--end-group
 
-LDFLAGS  = -static -Wl,--gc-sections $(IREE_LIBS) -lpthread -lm -ldl
+LDFLAGS  = -static -Wl,--gc-sections
+LDLIBS   = $(IREE_LIBS) -lpthread -lm -ldl
 
 # ── Project sources ─────────────────────────────────────────────────────────
-PROJ_SRCS = $(wildcard src/*.c)
+PROJ_SRCS = $(shell find src -name '*.c' 2>/dev/null | sort)
 
 # ── Object files ────────────────────────────────────────────────────────────
 BUILD_DIR = ./build
@@ -34,6 +36,13 @@ OBJS      = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PROJ_SRCS))
 
 TEST_SRCS = $(wildcard tests/*.c)
 TEST_OBJS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(TEST_SRCS))
+
+# ── Generated sources ───────────────────────────────────────────────────────
+GENERATED = src/olmoe/tokenizer_data.inc
+
+$(GENERATED): models/OLMoE-1B-7B-0924-Instruct/tokenizer.json scripts/generate_tokenizer_data.py
+	@echo "==> Generating $@"
+	python3 scripts/generate_tokenizer_data.py models/OLMoE-1B-7B-0924-Instruct/tokenizer.json $@
 
 .PHONY: all clean distclean prepare test iree
 
@@ -70,18 +79,20 @@ iree: $(IREE_STAMP)
 $(BUILD_DIR)/src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
+$(BUILD_DIR)/src/olmoe/tokenizer.o: $(GENERATED)
+
 $(BUILD_DIR)/tests/%.o: tests/%.c
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
 # ── Link ────────────────────────────────────────────────────────────────────
 $(BUILD_DIR)/main: $(OBJS) | $(IREE_STAMP)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
-$(BUILD_DIR)/test_runner: $(TEST_OBJS) | $(IREE_STAMP)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_OBJS)
+$(BUILD_DIR)/test_runner: $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OBJS)) | $(IREE_STAMP)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OBJS)) $(LDLIBS)
 
 # ── Tests ───────────────────────────────────────────────────────────────────
-test: $(BUILD_DIR)/test_runner
+test: prepare $(BUILD_DIR)/test_runner
 	$(BUILD_DIR)/test_runner
 
 # ── Clean ───────────────────────────────────────────────────────────────────

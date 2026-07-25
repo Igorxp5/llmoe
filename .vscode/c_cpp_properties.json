@@ -5,9 +5,12 @@
       "includePath": [
         "${workspaceFolder}",
         "${workspaceFolder}/src",
-        "${workspaceFolder}/vendor"
+        "${workspaceFolder}/vendor/iree/runtime/src",
+        "${workspaceFolder}/vendor/iree/third_party/flatcc/include"
       ],
-      "defines": [],
+      "defines": [
+        "IREE_ALLOCATOR_SYSTEM_CTL=iree_allocator_libc_ctl"
+      ],
       "compilerPath": "/usr/bin/gcc",
       "cStandard": "c99",
       "intelliSenseMode": "linux-gcc-x64"
