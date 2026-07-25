@@ -15,6 +15,7 @@ OLMoE inference engine written in C.
 - **ALWAYS** run the full test suite (`make test`) after making changes — never run only the tests in scope.
 - **ALWAYS** handle the warnings raised by the GCC compiler. If the best would be suppress it because it happens on a third-party library, ask me first.
 - **ALWAYS** extract duplicated logic you encounter within the files you are modifying. Do not refactor duplication in untouched files.
+- **ALWAYS** ensure every `.c` and `.h` file ends with a trailing newline (POSIX requirement).
 
 ### Integration & verification
 
