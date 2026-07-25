@@ -2,3 +2,6 @@ models/
 build/
 tests/generated/
 __pycache__/
+.plans/
+src/olmoe/tokenizer/tokenizer_data.inc
+tests/tokenizer_expected.inc

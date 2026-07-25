@@ -3,6 +3,7 @@ CFLAGS   = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
            -Wno-type-limits -Wno-unused-function \
            -fPIC -ffunction-sections -fdata-sections \
            -g -O2 \
+           -Wno-discarded-qualifiers \
            -DIREE_ALLOCATOR_SYSTEM_CTL=iree_allocator_libc_ctl
 
 # ── IREE installation (built via CMake) ──────────────────────────────────────
@@ -37,12 +38,24 @@ OBJS      = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PROJ_SRCS))
 TEST_SRCS = $(wildcard tests/*.c)
 TEST_OBJS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(TEST_SRCS))
 
+# ── Generated tokenizer data (embedded tokenizer.json as a C byte array) ────
+# The .inc is consumed by src/olmoe/tokenizer/tokenizer.c and passed verbatim
+# to IREE's iree_tokenizer_from_huggingface_json at runtime, so no JSON
+# parser or per-field codegen is needed in the binary.
+TOKENIZER_JSON    = models/OLMoE-1B-7B-0924-Instruct/tokenizer.json
+TOKENIZER_GEN     = scripts/generate_tokenizer_data.py
+TOKENIZER_INC     = src/olmoe/tokenizer/tokenizer_data.inc
+
 .PHONY: all clean distclean prepare test iree
 
-all: prepare $(IREE_STAMP) $(BUILD_DIR)/main
+all: prepare $(TOKENIZER_INC) $(IREE_STAMP) $(BUILD_DIR)/main
 
 prepare:
 	@mkdir -p $(BUILD_DIR) $(sort $(dir $(OBJS) $(TEST_OBJS)))
+
+# ── Regenerate embedded tokenizer data when source changes ─────────────────
+$(TOKENIZER_INC): $(TOKENIZER_JSON) $(TOKENIZER_GEN) | prepare
+	@.venv/bin/python $(TOKENIZER_GEN) $(TOKENIZER_JSON) $(TOKENIZER_INC)
 
 # ── IREE auto-build (runs CMake configure + build + install once) ────────────
 $(IREE_STAMP):
@@ -69,7 +82,7 @@ $(IREE_STAMP):
 iree: $(IREE_STAMP)
 
 # ── Compile project sources ─────────────────────────────────────────────────
-$(BUILD_DIR)/src/%.o: src/%.c
+$(BUILD_DIR)/src/%.o: src/%.c $(TOKENIZER_INC)
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
 $(BUILD_DIR)/tests/%.o: tests/%.c
@@ -83,7 +96,7 @@ $(BUILD_DIR)/test_runner: $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OB
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OBJS)) $(LDLIBS)
 
 # ── Tests ───────────────────────────────────────────────────────────────────
-test: prepare $(BUILD_DIR)/test_runner
+test: prepare $(TOKENIZER_INC) $(BUILD_DIR)/test_runner
 	$(BUILD_DIR)/test_runner
 
 # ── Clean ───────────────────────────────────────────────────────────────────

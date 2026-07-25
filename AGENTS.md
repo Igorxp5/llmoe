@@ -16,6 +16,17 @@ OLMoE inference engine written in C.
 - **ALWAYS** handle the warnings raised by the GCC compiler. If the best would be suppress it because it happens on a third-party library, ask me first.
 - **ALWAYS** extract duplicated logic you encounter within the files you are modifying. Do not refactor duplication in untouched files.
 
+### Integration & verification
+
+- **Validate a third-party library against the project's source-of-truth oracle BEFORE finalizing the test/expectation plan.** When replacing an existing implementation (e.g. hand-rolled BPE → IREE tokenizer), run the candidate library on the project's existing test corpus first and diff its output against the oracle (`scripts/tokenize_cli.py`, the `tokenizers` python package). Behavioral mismatches (e.g. IREE's greedy-leftmost added-token matching vs HF's longest-whole-run matching) must be discovered during planning, not after `make test` goes red.
+- **No diagnostic scratch files in the tree.** Throwaway probes (`probe_*.c`, one-off inspect scripts) belong in `/tmp` and must be deleted before reporting done. Never commit scaffolding you created to investigate a failure.
+- **Prefer repo-rooted include paths** (e.g. `#include "vendor/iree/runtime/src/iree/tokenizer/tokenizer.h"`) over the short form upstream examples use (`#include "iree/tokenizer/tokenizer.h"`). Both compile under the Makefile's `-I.` + `-Ivendor/iree/runtime/src`, but the repo-rooted form is self-documenting and grep-friendly.
+
+### Test code
+
+- **Test files follow the same SRP/naming rules as production code.** Split the test runner entry point (`main`) into its own file (`tests/test_main.c`); keep test cases in their own file. Test function names must be descriptive and unique (e.g. `test_null_input_returns_zero`, `test_overflow_probe_reports_full_count`), not generic (`run_one_case`, `run_edge_cases`).
+- **Keep sibling generator scripts under a consistent naming prefix.** All build-time codegen scripts use the `generate_*` prefix (e.g. `generate_tokenizer_data.py`, `generate_tokenizer_expect.py`); do not mix `gen_*` and `generate_*`.
+
 # Code style
 
 - Functions: 4-20 lines. Split if longer.

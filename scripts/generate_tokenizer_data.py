@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Generate src/olmoe/tokenizer_data.inc from tokenizer.json."""
+"""Generate src/olmoe/tokenizer/tokenizer_data.inc from tokenizer.json.
+
+The .inc is #included by src/olmoe/tokenizer/tokenizer.c and contributes
+`kTokenizerJsonData` (the raw bytes of tokenizer.json) plus
+`kTokenizerJsonDataLen`.  tokenizer.c hands those bytes to IREE's
+`iree_tokenizer_from_huggingface_json` at runtime, avoiding any JSON parser
+in the llmoe binary itself.
+
+Usage: generate_tokenizer_data.py <tokenizer.json> <out.inc>
+"""
 import sys
 
 def main():
