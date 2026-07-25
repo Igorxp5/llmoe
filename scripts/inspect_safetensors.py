@@ -17,6 +17,52 @@ def format_size(n_bytes):
     return f"{n_bytes:,} bytes"
 
 
+DTYPE_MAP = {
+    "F32":  (4, "f"),
+    "F64":  (8, "d"),
+    "F16":  (2, "e"),
+    "BF16": (2, None),
+    "I8":   (1, "b"),
+    "U8":   (1, "B"),
+    "I16":  (2, "h"),
+    "I32":  (4, "i"),
+    "I64":  (8, "q"),
+    "BOOL": (1, "?"),
+}
+
+
+def bf16_to_f32(b16_bytes):
+    u16 = struct.unpack("<H", b16_bytes)[0]
+    u32 = u16 << 16
+    return struct.unpack("<f", struct.pack("<I", u32))[0]
+
+
+def read_and_format_values(filepath, data_offsets, header_size, dtype, max_values):
+    byte_size, fmt = DTYPE_MAP.get(dtype, (None, None))
+    if byte_size is None:
+        raise ValueError(f"Unsupported dtype for value dump: {dtype}")
+
+    n_bytes = data_offsets[1] - data_offsets[0]
+    total_elements = n_bytes // byte_size
+
+    start_offset = 8 + header_size + data_offsets[0]
+    read_elements = min(total_elements, max_values)
+    read_bytes = read_elements * byte_size
+
+    with open(filepath, "rb") as f:
+        f.seek(start_offset)
+        data = f.read(read_bytes)
+
+    values = []
+    if dtype == "BF16":
+        for i in range(read_elements):
+            values.append(bf16_to_f32(data[i * 2 : (i + 1) * 2]))
+    else:
+        values = list(struct.unpack(f"<{read_elements}{fmt}", data))
+
+    return values, total_elements
+
+
 def read_safetensors_header(filepath):
     with open(filepath, "rb") as f:
         header_size_bytes = f.read(8)
@@ -27,7 +73,7 @@ def read_safetensors_header(filepath):
         if len(header_json) < header_size:
             raise ValueError(f"Truncated file, could not read full header: {filepath}")
     try:
-        return json.loads(header_json)
+        return json.loads(header_json), header_size
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in safetensors header: {filepath}: {e}")
 
@@ -50,6 +96,14 @@ def main():
     parser.add_argument(
         "--end", type=int, default=None,
         help="0-indexed end position in sorted tensor list (exclusive, default: all)"
+    )
+    parser.add_argument(
+        "--dump-values", "-d", action="store_true",
+        help="Print actual weight values for each tensor"
+    )
+    parser.add_argument(
+        "--max-values", type=int, default=256,
+        help="Max values to print per tensor when --dump-values is set (default: 256)"
     )
     args = parser.parse_args()
 
@@ -95,10 +149,13 @@ def main():
     base_dir = os.path.dirname(os.path.abspath(args.index))
 
     shard_headers = {}
+    shard_header_sizes = {}
     for shard_file in sorted(shards_needed):
         path = os.path.join(base_dir, shard_file)
         try:
-            shard_headers[shard_file] = read_safetensors_header(path)
+            hdr, hdr_size = read_safetensors_header(path)
+            shard_headers[shard_file] = hdr
+            shard_header_sizes[shard_file] = hdr_size
         except (ValueError, OSError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
@@ -126,6 +183,41 @@ def main():
         print(f"    dtype:  {dtype}")
         print(f"    shape:  {shape}")
         print(f"    bytes:  {format_size(n_bytes)}  (offset {offsets[0]:,} → {offsets[1]:,})")
+
+        if args.dump_values:
+            path = os.path.join(base_dir, shard)
+            try:
+                values, total_elements = read_and_format_values(
+                    path, offsets, shard_header_sizes[shard],
+                    dtype, args.max_values
+                )
+            except (ValueError, OSError) as e:
+                print(f"    Error reading values: {e}", file=sys.stderr)
+                continue
+
+            truncated = args.max_values < total_elements
+            shown = len(values)
+            if truncated:
+                shown_str = f"  (first {shown} of {total_elements})"
+            else:
+                shown_str = ""
+
+            if dtype in ("I8", "U8", "I16", "I32", "I64", "BOOL"):
+                fmt_value = str
+            elif dtype == "F16":
+                fmt_value = lambda v: f"{v:.6g}"
+            elif dtype in ("F32", "F64"):
+                fmt_value = lambda v: f"{v:.8g}"
+            elif dtype == "BF16":
+                fmt_value = lambda v: f"{v:.8g}"
+            else:
+                fmt_value = str
+
+            print(f"    Values:{shown_str}")
+            for i in range(0, shown, 8):
+                print("      " + " ".join(fmt_value(values[j]) for j in range(i, min(i + 8, shown))))
+            if truncated:
+                print(f"      ... ({total_elements - shown} more values)")
 
     print()
     print(f"Shards read: {len(shard_headers)}")

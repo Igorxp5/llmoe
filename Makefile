@@ -46,9 +46,17 @@ TOKENIZER_JSON    = models/OLMoE-1B-7B-0924-Instruct/tokenizer.json
 TOKENIZER_GEN     = scripts/generate_tokenizer_data.py
 TOKENIZER_INC     = src/olmoe/tokenizer/tokenizer_data.inc
 
+# ── Generated model layout (baked safetensors topology, no runtime JSON) ──
+# The .inc is consumed (via layers.h) by src/olmoe/layers/layers.c and the layer
+# tests; the loader only reads model-*.safetensors shards at runtime, never
+# the index.json that produced this file.
+MODEL_INDEX       = models/OLMoE-1B-7B-0924-Instruct/model.safetensors.index.json
+MODEL_GEN         = scripts/generate_model_layout.py
+MODEL_LAYOUT_INC  = src/olmoe/layers/model_layout.inc
+
 .PHONY: all clean distclean prepare test iree
 
-all: prepare $(TOKENIZER_INC) $(IREE_STAMP) $(BUILD_DIR)/main
+all: prepare $(TOKENIZER_INC) $(MODEL_LAYOUT_INC) $(IREE_STAMP) $(BUILD_DIR)/main
 
 prepare:
 	@mkdir -p $(BUILD_DIR) $(sort $(dir $(OBJS) $(TEST_OBJS)))
@@ -56,6 +64,10 @@ prepare:
 # ── Regenerate embedded tokenizer data when source changes ─────────────────
 $(TOKENIZER_INC): $(TOKENIZER_JSON) $(TOKENIZER_GEN) | prepare
 	@.venv/bin/python $(TOKENIZER_GEN) $(TOKENIZER_JSON) $(TOKENIZER_INC)
+
+# ── Regenerate baked model layout when the index or generator changes ───────
+$(MODEL_LAYOUT_INC): $(MODEL_INDEX) $(MODEL_GEN) | prepare
+	@.venv/bin/python $(MODEL_GEN) $(MODEL_INDEX) $(MODEL_LAYOUT_INC)
 
 # ── IREE auto-build (runs CMake configure + build + install once) ────────────
 $(IREE_STAMP):
@@ -82,10 +94,10 @@ $(IREE_STAMP):
 iree: $(IREE_STAMP)
 
 # ── Compile project sources ─────────────────────────────────────────────────
-$(BUILD_DIR)/src/%.o: src/%.c $(TOKENIZER_INC)
+$(BUILD_DIR)/src/%.o: src/%.c $(TOKENIZER_INC) $(MODEL_LAYOUT_INC)
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
-$(BUILD_DIR)/tests/%.o: tests/%.c
+$(BUILD_DIR)/tests/%.o: tests/%.c $(MODEL_LAYOUT_INC)
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
 # ── Link ────────────────────────────────────────────────────────────────────
@@ -96,7 +108,7 @@ $(BUILD_DIR)/test_runner: $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OB
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OBJS)) $(LDLIBS)
 
 # ── Tests ───────────────────────────────────────────────────────────────────
-test: prepare $(TOKENIZER_INC) $(BUILD_DIR)/test_runner
+test: prepare $(TOKENIZER_INC) $(MODEL_LAYOUT_INC) $(BUILD_DIR)/test_runner
 	$(BUILD_DIR)/test_runner
 
 # ── Clean ───────────────────────────────────────────────────────────────────
