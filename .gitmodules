@@ -1,0 +1,3 @@
+[submodule "vendor/utf8proc"]
+	path = vendor/utf8proc
+	url = https://github.com/JuliaStrings/utf8proc
