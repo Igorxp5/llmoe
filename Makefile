@@ -1,73 +1,70 @@
 CC       = gcc
 CFLAGS   = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
            -Wno-type-limits -Wno-unused-function \
-           -DIREE_ALLOCATOR_SYSTEM_CTL=iree_allocator_libc_ctl \
            -fPIC -ffunction-sections -fdata-sections \
            -g -O2
-LDFLAGS  = -static -Wl,--gc-sections -lpthread -lm
 
-IREE_DIR  = vendor/iree/runtime/src
+# ── IREE installation (built via CMake) ──────────────────────────────────────
+IREE_SRC_DIR  = vendor/iree/runtime/src
+IREE_FLATCC   = vendor/iree/third_party/flatcc/include
+IREE_PREFIX   = build/iree-install
+IREE_LIB_DIR  = $(IREE_PREFIX)/lib
+IREE_STAMP    = $(IREE_PREFIX)/.stamp
 
-INCS      = -I$(IREE_DIR) -I. -Isrc
+INCS      = -I$(IREE_SRC_DIR) -I$(IREE_FLATCC) -I. -Isrc
 
-# ── IREE Tokenizer sources ──────────────────────────────────────────────────
-IREE_TKZ  = $(IREE_DIR)/iree/tokenizer
-IREE_TKZ_SRCS := $(shell find $(IREE_TKZ) -name '*.c' \
-                 ! -path '*_test.cc'    ! -path '*_fuzz.cc' \
-                 ! -path '*_benchmark*' ! -path '*/testing/*' \
-                 ! -path '*/testdata/*' ! -path '*/tools/*')
+# ── IREE static libraries (tokenizer, base, flatcc) ─────────────────────────
+# Only tokenizer+base are linked; HAL/VM/ukernel are excluded to avoid
+# mutually-exclusive arch-specific implementations causing duplicate symbols.
+IREE_LIBS  = -Wl,--start-group \
+             $(shell find $(IREE_LIB_DIR) -name 'libiree_tokenizer*.a' 2>/dev/null | sort) \
+             $(shell find $(IREE_LIB_DIR) -name 'libiree_base*.a' 2>/dev/null | sort) \
+             $(shell find $(IREE_LIB_DIR) -name 'libiree_testing_benchmark.a' 2>/dev/null) \
+             $(shell find $(BUILD_DIR)/iree-build/build_tools/third_party/flatcc -name 'libflatcc*.a' 2>/dev/null | sort) \
+             -Wl,--end-group
 
-# ── IREE Base sources (only what the tokenizer needs) ───────────────────────
-IREE_BASE = $(IREE_DIR)/iree/base
-IREE_BASE_SRCS = \
-	$(IREE_BASE)/allocator.c          $(IREE_BASE)/allocator_libc.c \
-	$(IREE_BASE)/bitfield.c           $(IREE_BASE)/bitmap.c \
-	$(IREE_BASE)/printf.c             $(IREE_BASE)/status.c \
-	$(IREE_BASE)/status_stack_trace.c $(IREE_BASE)/string_builder.c \
-	$(IREE_BASE)/string_view.c        $(IREE_BASE)/time.c \
-	$(IREE_BASE)/wait_source.c \
-	$(IREE_BASE)/internal/unicode.c   $(IREE_BASE)/internal/unicode_tables.c \
-	$(IREE_BASE)/internal/arena.c     $(IREE_BASE)/internal/atomic_slist.c \
-	$(IREE_BASE)/internal/json.c      $(IREE_BASE)/internal/memory.c \
-	$(IREE_BASE)/internal/time.c      $(IREE_BASE)/internal/base64.c \
-	$(IREE_BASE)/internal/path.c      $(IREE_BASE)/internal/cpu.c \
-	$(IREE_BASE)/internal/fpu_state.c $(IREE_BASE)/internal/csprng.c \
-	$(IREE_BASE)/internal/spsc_queue.c $(IREE_BASE)/internal/mpsc_queue.c \
-	$(IREE_BASE)/threading/thread.c   $(IREE_BASE)/threading/thread_pthreads.c \
-	$(IREE_BASE)/threading/mutex.c    $(IREE_BASE)/threading/notification.c \
-	$(IREE_BASE)/threading/affinity.c $(IREE_BASE)/threading/numa_fallback.c \
-	$(IREE_BASE)/threading/wait_address.c \
-	$(IREE_BASE)/tracing/console.c
+LDFLAGS  = -static -Wl,--gc-sections $(IREE_LIBS) -lpthread -lm -ldl
 
 # ── Project sources ─────────────────────────────────────────────────────────
 PROJ_SRCS = $(wildcard src/*.c)
 
-# ── All sources ─────────────────────────────────────────────────────────────
-ALL_SRCS  = $(PROJ_SRCS) $(IREE_TKZ_SRCS) $(IREE_BASE_SRCS)
-
 # ── Object files ────────────────────────────────────────────────────────────
 BUILD_DIR = ./build
-OBJS      = $(patsubst $(IREE_DIR)/%.c,$(BUILD_DIR)/%.o,$(IREE_TKZ_SRCS) $(IREE_BASE_SRCS))
-OBJS     += $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PROJ_SRCS))
-
-IREE_OBJS = $(patsubst $(IREE_DIR)/%.c,$(BUILD_DIR)/%.o,$(IREE_TKZ_SRCS) $(IREE_BASE_SRCS))
+OBJS      = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PROJ_SRCS))
 
 TEST_SRCS = $(wildcard tests/*.c)
 TEST_OBJS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(TEST_SRCS))
 
-.PHONY: all clean prepare test
+.PHONY: all clean distclean prepare test iree
 
-all: prepare $(BUILD_DIR)/main
+all: prepare $(IREE_STAMP) $(BUILD_DIR)/main
 
 prepare:
-	@mkdir -p $(BUILD_DIR) $(sort $(dir $(OBJS) $(TEST_OBJS) $(IREE_OBJS)))
+	@mkdir -p $(BUILD_DIR) $(sort $(dir $(OBJS) $(TEST_OBJS)))
 
-# ── Compile IREE sources ────────────────────────────────────────────────────
-$(BUILD_DIR)/iree/%.o: $(IREE_DIR)/iree/%.c
-	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
+# ── IREE auto-build (runs CMake configure + build + install once) ────────────
+$(IREE_STAMP):
+	@echo "==> Building IREE from vendor/iree (this may take a while)..."
+	cmake -G Ninja -B $(BUILD_DIR)/iree-build -S vendor/iree \
+	    -DCMAKE_BUILD_TYPE=Release \
+	    -DCMAKE_C_COMPILER=clang \
+	    -DCMAKE_CXX_COMPILER=clang++ \
+	    -DIREE_BUILD_COMPILER=OFF \
+	    -DIREE_BUILD_TESTS=OFF \
+	    -DIREE_BUILD_SAMPLES=OFF \
+	    -DIREE_BUILD_BENCHMARKS=OFF \
+	    -DIREE_BUILD_PYTHON_BINDINGS=OFF \
+	    -DIREE_BUILD_BINDINGS_TFLITE=OFF \
+	    -DIREE_BUILD_BINDINGS_TFLITE_JAVA=OFF \
+	    -DIREE_HAL_DRIVER_DEFAULTS=OFF \
+	    -DIREE_ERROR_ON_MISSING_SUBMODULES=OFF
+	cmake --build $(BUILD_DIR)/iree-build -j$$(nproc)
+	cmake --install $(BUILD_DIR)/iree-build --prefix $(IREE_PREFIX) \
+	    --component IREEDevLibraries-Runtime
+	@touch $@
+	@echo "==> IREE build complete"
 
-$(BUILD_DIR)/iree/tokenizer/%.o: $(IREE_DIR)/iree/tokenizer/%.c
-	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
+iree: $(IREE_STAMP)
 
 # ── Compile project sources ─────────────────────────────────────────────────
 $(BUILD_DIR)/src/%.o: src/%.c
@@ -77,15 +74,20 @@ $(BUILD_DIR)/tests/%.o: tests/%.c
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
 # ── Link ────────────────────────────────────────────────────────────────────
-$(BUILD_DIR)/main: $(OBJS)
+$(BUILD_DIR)/main: $(OBJS) | $(IREE_STAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS)
 
-# ── Tests ───────────────────────────────────────────────────────────────────
-$(BUILD_DIR)/test_runner: $(TEST_OBJS) $(IREE_OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_OBJS) $(IREE_OBJS)
+$(BUILD_DIR)/test_runner: $(TEST_OBJS) | $(IREE_STAMP)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_OBJS)
 
+# ── Tests ───────────────────────────────────────────────────────────────────
 test: $(BUILD_DIR)/test_runner
 	$(BUILD_DIR)/test_runner
 
+# ── Clean ───────────────────────────────────────────────────────────────────
 clean:
+	rm -rf $(BUILD_DIR)/*.o $(BUILD_DIR)/src $(BUILD_DIR)/tests
+	rm -f $(BUILD_DIR)/main $(BUILD_DIR)/test_runner
+
+distclean:
 	rm -rf $(BUILD_DIR)
