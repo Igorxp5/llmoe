@@ -1,3 +1,4 @@
 [submodule "vendor/iree"]
 	path = vendor/iree
 	url = https://github.com/iree-org/iree
+	ignore = dirty
