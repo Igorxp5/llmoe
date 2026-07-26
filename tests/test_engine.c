@@ -8,6 +8,7 @@
 
 int test_engine_matmul_pass(void);
 int test_engine_norm_pass(void);
+int test_engine_mlp_pass(void);
 
 /* ---------- checks ------------------------------------------------------ */
 
@@ -113,5 +114,6 @@ int test_engine_stubs_pass(void)
     failed += test_forward_oversize_seq_returns_shape();
     failed += test_engine_matmul_pass();
     failed += test_engine_norm_pass();
+    failed += test_engine_mlp_pass();
     return failed;
 }

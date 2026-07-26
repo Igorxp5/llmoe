@@ -7,25 +7,6 @@
 
 #include "test_engine_helpers.h"
 
-/* Pure-C scalar matmul reference: same BF16->FP32 weight promotion as the
- * SIMD kernel, so the only divergence is FP32 accumulation order. */
-static float scalar_dot_bf16(const olmoe_act_t *a, const olmoe_bf16_t *w, size_t k)
-{
-    float s = 0.0f;
-    for (size_t l = 0; l < k; ++l)
-        s += a[l] * bf16_to_f32(w[l]);
-    return s;
-}
-
-static void scalar_matmul_bf16(olmoe_act_t *out, const olmoe_act_t *a,
-                               const olmoe_bf16_t *w,
-                               size_t m, size_t n, size_t k)
-{
-    for (size_t i = 0; i < m; ++i)
-        for (size_t j = 0; j < n; ++j)
-            out[i * n + j] = scalar_dot_bf16(a + i * k, w + j * k, k);
-}
-
 /* Small-dim full check of cpu_matmul_bf16: every output lane compared. */
 static int check_matmul_kernel_small_dim(void)
 {
