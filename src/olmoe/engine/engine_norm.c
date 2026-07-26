@@ -16,7 +16,8 @@ void olmoe_final_norm_forward(const olmoe_bf16_t *w,
                                 const olmoe_act_t *x, size_t seq_len,
                                 olmoe_act_t *out)
 {
-    /* TODO: RMSNorm(x, w). */
+    /* Model-final RMSNorm before the LM head; same kernel/eps as input_ln. */
+    cpu_rmsnorm(out, x, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }
 
 void olmoe_input_ln_forward(const olmoe_bf16_t *w,

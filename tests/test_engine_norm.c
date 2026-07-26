@@ -151,11 +151,43 @@ static int test_k_norm_matches_scalar(void)
     return failed;
 }
 
+/* olmoe_final_norm_forward: out-of-place RMSNorm before the LM head,
+ * identical to input_ln. Reuses scalar_input_ln (same RMSNorm formula) and
+ * lanes_match for the rtol 1e-4 / atol 1e-5 comparison. */
+static int test_final_norm_matches_scalar(void)
+{
+    enum { ROWS = 3 };
+    olmoe_bf16_t w[OLMOE_HIDDEN];
+    olmoe_act_t x[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t got[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t want[ROWS * OLMOE_HIDDEN];
+
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) w[k] = f32_to_bf16((float)(k + 1));
+
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) x[k] = 1.0f;
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k)
+        x[OLMOE_HIDDEN + k] = (k & 1) ? -1.0f : 1.0f;
+    unsigned int rng = 0xcafef00du;
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) {
+        rng = rng * 1664525u + 1013904223u;
+        x[2 * OLMOE_HIDDEN + k] = (float)((int)rng % 1001) / 500.0f - 1.0f;
+    }
+
+    olmoe_final_norm_forward(w, x, ROWS, got);
+    scalar_input_ln(w, x, ROWS, want);
+
+    int failed = lanes_match(got, want, (size_t)ROWS * OLMOE_HIDDEN);
+    if (failed) printf("FAIL: final_norm matches scalar RMSNorm\n");
+    else printf("PASS: final_norm matches scalar RMSNorm\n");
+    return failed;
+}
+
 int test_engine_norm_pass(void)
 {
     int failed = 0;
     failed += test_input_ln_matches_scalar();
     failed += test_q_norm_matches_scalar();
     failed += test_k_norm_matches_scalar();
+    failed += test_final_norm_matches_scalar();
     return failed;
 }
