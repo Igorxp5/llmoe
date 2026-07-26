@@ -479,6 +479,36 @@ static int test_q_norm_matches_scalar(void)
     return failed;
 }
 
+/* olmoe_k_norm_forward: in-place RMSNorm over k, same data pattern as
+ * test_q_norm_matches_scalar. Reuses scalar_rmsnorm_inplace + lanes_match. */
+static int test_k_norm_matches_scalar(void)
+{
+    enum { ROWS = 3 };
+    olmoe_bf16_t w[OLMOE_HIDDEN];
+    olmoe_act_t k[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t k_copy[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t want[ROWS * OLMOE_HIDDEN];
+
+    for (size_t i = 0; i < OLMOE_HIDDEN; ++i) w[i] = f32_to_bf16((float)(i + 1));
+    for (size_t i = 0; i < OLMOE_HIDDEN; ++i) k[i] = 1.0f;
+    for (size_t i = 0; i < OLMOE_HIDDEN; ++i)
+        k[OLMOE_HIDDEN + i] = (i & 1) ? -1.0f : 1.0f;
+    unsigned int rng = 0xbadcafeu;
+    for (size_t i = 0; i < OLMOE_HIDDEN; ++i) {
+        rng = rng * 1664525u + 1013904223u;
+        k[2 * OLMOE_HIDDEN + i] = (float)((int)rng % 1001) / 500.0f - 1.0f;
+    }
+
+    memcpy(k_copy, k, sizeof k);
+    olmoe_k_norm_forward(w, k, ROWS);
+    scalar_rmsnorm_inplace(w, k_copy, ROWS, want);
+
+    int failed = lanes_match(k, want, (size_t)ROWS * OLMOE_HIDDEN);
+    if (failed) printf("FAIL: k_norm matches scalar RMSNorm\n");
+    else printf("PASS: k_norm matches scalar RMSNorm\n");
+    return failed;
+}
+
 /* ---------- dispatcher --------------------------------------------------- */
 
 int test_engine_stubs_pass(void)
@@ -496,5 +526,6 @@ int test_engine_stubs_pass(void)
     failed += test_v_proj_matmul_matches_scalar();
     failed += test_o_proj_matmul_matches_scalar();
     failed += test_q_norm_matches_scalar();
+    failed += test_k_norm_matches_scalar();
     return failed;
 }

@@ -46,5 +46,6 @@ void olmoe_q_norm_forward(const olmoe_bf16_t *w,
 void olmoe_k_norm_forward(const olmoe_bf16_t *w,
                            olmoe_act_t *k, size_t seq_len)
 {
-    /* TODO: in-place RMSNorm over k. */
+    /* In-place over k; same kernel as q_norm (q/k norms are identical ops). */
+    cpu_rmsnorm(k, k, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }
