@@ -42,11 +42,22 @@ void olmoe_mlp_gate_forward(const olmoe_bf16_t *w,
     free(logits);
 }
 
+/* Shared by the three expert matmuls: gate/up project x [tok, hidden]
+ * to [tok, inter], down projects x [tok, inter] back to [tok, hidden].
+ * The dim roles are caller-supplied so each op names its own weight rows. */
+static void expert_proj_forward(const olmoe_bf16_t *w, const olmoe_act_t *x,
+                                size_t n_tokens, size_t n_out, size_t k_in,
+                                olmoe_act_t *out)
+{
+    cpu_matmul_bf16(out, x, w, n_tokens, n_out, k_in);
+}
+
 void olmoe_expert_gate_forward(const olmoe_expert_t *e,
                                const olmoe_act_t *x, size_t n_tokens,
                                olmoe_act_t *out)
 {
-    /* TODO: x @ gate_proj^T -> out[n_tokens, inter]. */
+    expert_proj_forward(e->gate_proj, x, n_tokens,
+                        (size_t)OLMOE_INTER, (size_t)OLMOE_HIDDEN, out);
 }
 
 void olmoe_expert_up_forward(const olmoe_expert_t *e,

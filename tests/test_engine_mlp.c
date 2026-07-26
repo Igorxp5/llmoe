@@ -142,9 +142,49 @@ static int test_mlp_gate_matches_scalar(void)
     return failed;
 }
 
+/* Real-dim check of olmoe_expert_gate_forward: full [inter, hidden] BF16
+ * gate_proj (4 MiB) at n_tokens 2, compared against the shared scalar
+ * matmul reference over all 2*inter output lanes. */
+static int test_expert_gate_matches_scalar(void)
+{
+    enum { TOK = 2 };
+    size_t inter = (size_t)OLMOE_INTER, hidden = (size_t)OLMOE_HIDDEN;
+
+    olmoe_expert_t expert;
+    memset(&expert, 0, sizeof expert);
+    expert.gate_proj = malloc(inter * hidden * sizeof *expert.gate_proj);
+    olmoe_act_t *x = malloc(TOK * hidden * sizeof *x);
+    olmoe_act_t *out = malloc(TOK * inter * sizeof *out);
+    olmoe_act_t *scalar_out = malloc(TOK * inter * sizeof *scalar_out);
+    if (!expert.gate_proj || !x || !out || !scalar_out) {
+        printf("FAIL: expert_gate malloc OOM\n");
+        free(expert.gate_proj); free(x); free(out); free(scalar_out);
+        return 1;
+    }
+
+    for (size_t j = 0; j < inter; ++j)
+        for (size_t l = 0; l < hidden; ++l)
+            expert.gate_proj[j * hidden + l] =
+                f32_to_bf16((float)(((int)((j * hidden + l) % 13)) - 6) * 0.0625f);
+    for (size_t i = 0; i < TOK; ++i)
+        for (size_t l = 0; l < hidden; ++l)
+            x[i * hidden + l] =
+                (float)(((int)((i * 5 + l * 3) % 17)) - 8) * 0.03125f;
+
+    olmoe_expert_gate_forward(&expert, x, TOK, out);
+    scalar_matmul_bf16(scalar_out, x, expert.gate_proj, TOK, inter, hidden);
+
+    int failed = lanes_match(out, scalar_out, TOK * inter);
+    free(expert.gate_proj); free(x); free(out); free(scalar_out);
+    if (!failed) printf("PASS: expert_gate matmul matches scalar\n");
+    else         printf("FAIL: expert_gate matmul matches scalar\n");
+    return failed;
+}
+
 int test_engine_mlp_pass(void)
 {
     int failed = 0;
     failed += test_mlp_gate_matches_scalar();
+    failed += test_expert_gate_matches_scalar();
     return failed;
 }
