@@ -422,6 +422,63 @@ static int test_o_proj_matmul_matches_scalar(void)
     return failed;
 }
 
+/* Pure-C scalar in-place RMSNorm reference for q_norm; out is a separate
+ * buffer so it never aliases x, even though the SIMD op writes in-place. */
+static void scalar_rmsnorm_inplace(const olmoe_bf16_t *w,
+                                    const olmoe_act_t *x, size_t seq_len,
+                                    olmoe_act_t *out)
+{
+    const float eps = 1e-5f;
+    for (size_t i = 0; i < seq_len; ++i) {
+        const olmoe_act_t *xr = x + i * OLMOE_HIDDEN;
+        olmoe_act_t *or_ = out + i * OLMOE_HIDDEN;
+        float ss = 0.0f;
+        for (size_t k = 0; k < OLMOE_HIDDEN; ++k) ss += xr[k] * xr[k];
+        float scale = 1.0f / sqrtf(ss / (float)OLMOE_HIDDEN + eps);
+        for (size_t k = 0; k < OLMOE_HIDDEN; ++k)
+            or_[k] = xr[k] * scale * bf16_to_f32(w[k]);
+    }
+}
+
+/* olmoe_q_norm_forward applies RMSNorm in-place over q[seq, hidden]. Same
+ * data-generation pattern as test_input_ln_matches_scalar: a constant row,
+ * an alternating +/-1 row, and an LCG row for variety. */
+static int test_q_norm_matches_scalar(void)
+{
+    enum { ROWS = 3 };
+    olmoe_bf16_t w[OLMOE_HIDDEN];
+    olmoe_act_t q[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t q_copy[ROWS * OLMOE_HIDDEN];
+    olmoe_act_t want[ROWS * OLMOE_HIDDEN];
+
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) w[k] = f32_to_bf16((float)(k + 1));
+
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) q[k] = 1.0f;
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k)
+        q[OLMOE_HIDDEN + k] = (k & 1) ? -1.0f : 1.0f;
+    unsigned int rng = 0xfeedfaceu;
+    for (size_t k = 0; k < OLMOE_HIDDEN; ++k) {
+        rng = rng * 1664525u + 1013904223u;
+        q[2 * OLMOE_HIDDEN + k] = (float)((int)rng % 1001) / 500.0f - 1.0f;
+    }
+
+    memcpy(q_copy, q, sizeof q);
+    olmoe_q_norm_forward(w, q, ROWS);
+    scalar_rmsnorm_inplace(w, q_copy, ROWS, want);
+
+    int failed = 0;
+    for (size_t i = 0; i < ROWS * OLMOE_HIDDEN && !failed; ++i) {
+        float a = q[i], b = want[i];
+        float diff = fabsf(a - b);
+        if (diff > 1e-5f && diff > 1e-4f * fabsf(b)) {
+            printf("FAIL: q_norm lane %zu got=%.7f want=%.7f\n", i, a, b);
+            ++failed;
+        }
+    }
+    if (!failed) printf("PASS: q_norm matches scalar RMSNorm\n");
+    return failed;
+}
+
 /* ---------- dispatcher --------------------------------------------------- */
 
 int test_engine_stubs_pass(void)
@@ -438,5 +495,6 @@ int test_engine_stubs_pass(void)
     failed += test_k_proj_matmul_matches_scalar();
     failed += test_v_proj_matmul_matches_scalar();
     failed += test_o_proj_matmul_matches_scalar();
+    failed += test_q_norm_matches_scalar();
     return failed;
 }
