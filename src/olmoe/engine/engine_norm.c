@@ -34,7 +34,9 @@ void olmoe_post_ln_forward(const olmoe_bf16_t *w,
                             const olmoe_act_t *x, size_t seq_len,
                             olmoe_act_t *out)
 {
-    /* TODO: RMSNorm(x, w). */
+    /* Post-attention RMSNorm before the MLP; same kernel/eps as input_ln,
+     * applied out-of-place (see input_ln note on in-place safety). */
+    cpu_rmsnorm(out, x, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }
 
 void olmoe_q_norm_forward(const olmoe_bf16_t *w,
