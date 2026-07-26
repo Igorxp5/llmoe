@@ -72,5 +72,6 @@ void olmoe_expert_down_forward(const olmoe_expert_t *e,
                                const olmoe_act_t *x, size_t n_tokens,
                                olmoe_act_t *out)
 {
-    /* TODO: x @ down_proj^T -> out[n_tokens, hidden]. */
+    expert_proj_forward(e->down_proj, x, n_tokens,
+                        (size_t)OLMOE_HIDDEN, (size_t)OLMOE_INTER, out);
 }

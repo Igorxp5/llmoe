@@ -221,11 +221,52 @@ static int test_expert_up_matches_scalar(void)
     return failed;
 }
 
+/* Real-dim check of olmoe_expert_down_forward: full [hidden, inter] BF16
+ * down_proj (4 MiB) at n_tokens 2, comparing all 2*hidden output lanes
+ * against the shared scalar matmul reference. Input is the inter activation
+ * [tok, inter]; down projects it back to [tok, hidden]. */
+static int test_expert_down_matches_scalar(void)
+{
+    enum { TOK = 2 };
+    size_t inter = (size_t)OLMOE_INTER, hidden = (size_t)OLMOE_HIDDEN;
+
+    olmoe_expert_t expert;
+    memset(&expert, 0, sizeof expert);
+    expert.down_proj = malloc(hidden * inter * sizeof *expert.down_proj);
+    olmoe_act_t *x = malloc(TOK * inter * sizeof *x);
+    olmoe_act_t *out = malloc(TOK * hidden * sizeof *out);
+    olmoe_act_t *scalar_out = malloc(TOK * hidden * sizeof *scalar_out);
+    if (!expert.down_proj || !x || !out || !scalar_out) {
+        printf("FAIL: expert_down malloc OOM\n");
+        free(expert.down_proj); free(x); free(out); free(scalar_out);
+        return 1;
+    }
+
+    for (size_t j = 0; j < hidden; ++j)
+        for (size_t l = 0; l < inter; ++l)
+            expert.down_proj[j * inter + l] =
+                f32_to_bf16((float)(((int)((j * inter + l) % 7)) - 3) * 0.25f);
+    for (size_t i = 0; i < TOK; ++i)
+        for (size_t l = 0; l < inter; ++l)
+            x[i * inter + l] =
+                (float)(((int)((i * 5 + l * 3) % 17)) - 8) * 0.03125f;
+
+    olmoe_expert_down_forward(&expert, x, TOK, out);
+    scalar_matmul_bf16(scalar_out, x, expert.down_proj, TOK, hidden, inter);
+
+    int failed = lanes_match(out, scalar_out, TOK * hidden);
+    free(expert.down_proj); free(x); free(out); free(scalar_out);
+    if (!failed) printf("PASS: expert_down matmul matches scalar\n");
+    else         printf("FAIL: expert_down matmul matches scalar\n");
+    return failed;
+}
+
 int test_engine_mlp_pass(void)
 {
     int failed = 0;
     failed += test_mlp_gate_matches_scalar();
     failed += test_expert_gate_matches_scalar();
     failed += test_expert_up_matches_scalar();
+    failed += test_expert_down_matches_scalar();
     return failed;
 }
