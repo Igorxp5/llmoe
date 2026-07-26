@@ -1,32 +1,15 @@
 /* RMSNorm family (1:1 with OLMOE_KIND_NORM / INPUT_LN / POST_LN / Q_NORM /
  * K_NORM). Stubs only; see docs/engine_module.md. */
 
-#include <immintrin.h>
 #include <math.h>
 
 #include "olmoe/engine/engine.h"
-
-/* Scoped AVX512 enablement: only this TU gets the feature, so the global
- * CFLAGS baseline stays clean and the other 14 stubs/tests are untouched.
- * We use AVX512F/BW/VL lane math; avx512bf16 is enabled because the weights
- * are BF16 and the dedicated BF16 path (promotion via shift) relies on the
- * 16-bit lane granularity of BW. We deliberately do NOT use dpbf16_ps: it
- * quantizes FP32 activations and drifts from a canonical FP32 RMSNorm. */
-#pragma GCC target("avx512f,avx512bw,avx512vl,avx512bf16")
+#include "olmoe/engine/engine_internal.h"
 
 /* RMSNorm epsilon. config.json does not carry rms_norm_eps, so this matches
  * the HF OlmEConfig default (1e-5). Local to this module until a second
  * norm kind goes real; promoting a shared constant then is one-line. */
 static const float INPUT_LN_EPS = 1e-5f;
-
-/* Load 16 BF16 (uint16) lanes and promote to 16 FP32 lanes using the
- * dedicated AVX512-BF16 conversion intrinsic. _mm512_cvtpbh_ps takes a
- * __m256i of packed BF16 and emits a __m512 of FP32. */
-static inline __m512 bf16x16_to_fp32(const olmoe_bf16_t *p)
-{
-    __m256i src = _mm256_loadu_si256((const __m256i *)p);
-    return _mm512_cvtpbh_ps((__m256bh)src);
-}
 
 olmoe_status_t olmoe_final_norm_forward(const olmoe_bf16_t *w,
                                         const olmoe_act_t *x, size_t seq_len,
@@ -61,7 +44,7 @@ static void row_scale_by_weight(const olmoe_act_t *x, float scale,
     __m512 vscale = _mm512_set1_ps(scale);
     for (size_t k = 0; k < OLMOE_HIDDEN; k += 16) {
         __m512 vx = _mm512_loadu_ps(x + k);
-        __m512 vw = bf16x16_to_fp32(w + k);
+        __m512 vw = olmoe_engine_bf16x16_to_fp32(w + k);
         __m512 vout = _mm512_mul_ps(_mm512_mul_ps(vx, vscale), vw);
         _mm512_storeu_ps(out + k, vout);
     }

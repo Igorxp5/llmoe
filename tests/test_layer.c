@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "olmoe/engine/engine.h"
 #include "olmoe/layers/layers.h"
 
 #include "test_layer.h"
@@ -162,6 +163,49 @@ static int test_expert_zero_down_values_match_oracle(const olmoe_model_t *m)
     return 0;
 }
 
+/* embed_forward: row-gather BF16→FP32 against a scalar reference. Uses two
+ * fixed ids (0 and 1000) to exercise non-trivial row offsets. */
+static int test_embed_lookup_matches_oracle(const olmoe_model_t *m)
+{
+    enum { N = 2 };
+    int ids[N] = {0, 1000};
+    olmoe_act_t hidden_out[N * OLMOE_HIDDEN];
+    int failed = 0;
+
+    olmoe_status_t st = olmoe_embed_forward(m, ids, N, hidden_out);
+    if (st != OLMOE_OK) {
+        printf("FAIL: embed_forward returned %d (want OK)\n", st);
+        ++failed;
+    }
+
+    for (size_t i = 0; i < N; ++i) {
+        for (size_t k = 0; k < OLMOE_HIDDEN; ++k) {
+            uint32_t u = (uint32_t)m->embed_tokens[ids[i] * OLMOE_HIDDEN + k] << 16;
+            float want;
+            memcpy(&want, &u, sizeof want);
+            float got = hidden_out[i * OLMOE_HIDDEN + k];
+            if (got != want) {
+                printf("FAIL: embed row=%zu lane=%zu got=%.8g want=%.8g\n",
+                       i, k, got, want);
+                ++failed;
+                goto done;
+            }
+        }
+    }
+
+    /* seq_len==0 short-circuits even with NULL buffers. */
+    st = olmoe_embed_forward(NULL, NULL, 0, NULL);
+    if (st != OLMOE_OK) {
+        printf("FAIL: embed_forward(seq_len=0) should return OK\n");
+        ++failed;
+    }
+
+done:
+    if (!failed)
+        printf("PASS: embed_forward lookup matches scalar reference\n");
+    return failed;
+}
+
 /* ---------- dispatcher -------------------------------------------------- */
 
 static const char *resolve_model_dir(void)
@@ -195,6 +239,7 @@ int test_layer_loads_and_validates(void)
     failed += test_norm_first_values_match_oracle(m);
     failed += test_lm_head_first_values_match_oracle(m);
     failed += test_expert_zero_down_values_match_oracle(m);
+    failed += test_embed_lookup_matches_oracle(m);
 
     olmoe_model_free(m);
     return failed;
