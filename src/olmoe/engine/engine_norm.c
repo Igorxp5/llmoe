@@ -11,18 +11,11 @@
  * norm kind goes real; promoting a shared constant then is one-line. */
 static const float INPUT_LN_EPS = 1e-5f;
 
-olmoe_status_t olmoe_final_norm_forward(const olmoe_bf16_t *w,
-                                        const olmoe_act_t *x, size_t seq_len,
-                                        olmoe_act_t *out)
+void olmoe_final_norm_forward(const olmoe_bf16_t *w,
+                               const olmoe_act_t *x, size_t seq_len,
+                               olmoe_act_t *out)
 {
-    if (seq_len == 0) {
-        return OLMOE_OK;
-    }
-    if (!w || !x || !out) {
-        return OLMOE_ERR_NULL;
-    }
     /* TODO: RMSNorm(x, w). */
-    return OLMOE_OK;
 }
 
 /* Sum of squares of one OLMOE_HIDDEN-length FP32 row, reduced to a scalar.
@@ -50,17 +43,10 @@ static void row_scale_by_weight(const olmoe_act_t *x, float scale,
     }
 }
 
-olmoe_status_t olmoe_input_ln_forward(const olmoe_bf16_t *w,
-                                      const olmoe_act_t *x, size_t seq_len,
-                                      olmoe_act_t *out)
+void olmoe_input_ln_forward(const olmoe_bf16_t *w,
+                            const olmoe_act_t *x, size_t seq_len,
+                            olmoe_act_t *out)
 {
-    if (seq_len == 0) {
-        return OLMOE_OK;
-    }
-    if (!w || !x || !out) {
-        return OLMOE_ERR_NULL;
-    }
-
     /* out = x * rsqrt(mean(x^2) + eps) * w, per OLMoE HF RMSNorm. Two passes
      * per row: pass 1 reads x for the squared-mean, pass 2 reads x again and
      * writes out. Out-of-place is required; in-place (x == out) is also safe
@@ -72,45 +58,23 @@ olmoe_status_t olmoe_input_ln_forward(const olmoe_bf16_t *w,
         float scale = 1.0f / sqrtf(mean + INPUT_LN_EPS);
         row_scale_by_weight(x + off, scale, w, out + off);
     }
-    return OLMOE_OK;
 }
 
-olmoe_status_t olmoe_post_ln_forward(const olmoe_bf16_t *w,
-                                     const olmoe_act_t *x, size_t seq_len,
-                                     olmoe_act_t *out)
+void olmoe_post_ln_forward(const olmoe_bf16_t *w,
+                           const olmoe_act_t *x, size_t seq_len,
+                           olmoe_act_t *out)
 {
-    if (seq_len == 0) {
-        return OLMOE_OK;
-    }
-    if (!w || !x || !out) {
-        return OLMOE_ERR_NULL;
-    }
     /* TODO: RMSNorm(x, w). */
-    return OLMOE_OK;
 }
 
-olmoe_status_t olmoe_q_norm_forward(const olmoe_bf16_t *w,
-                                    olmoe_act_t *q, size_t seq_len)
+void olmoe_q_norm_forward(const olmoe_bf16_t *w,
+                          olmoe_act_t *q, size_t seq_len)
 {
-    if (seq_len == 0) {
-        return OLMOE_OK;
-    }
-    if (!w || !q) {
-        return OLMOE_ERR_NULL;
-    }
     /* TODO: in-place RMSNorm over q. */
-    return OLMOE_OK;
 }
 
-olmoe_status_t olmoe_k_norm_forward(const olmoe_bf16_t *w,
-                                    olmoe_act_t *k, size_t seq_len)
+void olmoe_k_norm_forward(const olmoe_bf16_t *w,
+                          olmoe_act_t *k, size_t seq_len)
 {
-    if (seq_len == 0) {
-        return OLMOE_OK;
-    }
-    if (!w || !k) {
-        return OLMOE_ERR_NULL;
-    }
     /* TODO: in-place RMSNorm over k. */
-    return OLMOE_OK;
 }
