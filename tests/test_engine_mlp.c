@@ -181,10 +181,51 @@ static int test_expert_gate_matches_scalar(void)
     return failed;
 }
 
+/* Real-dim check of olmoe_expert_up_forward: full [inter, hidden] BF16
+ * up_proj (4 MiB) at n_tokens 2, compared against the shared scalar
+ * matmul reference over all 2*inter output lanes. Uses a distinct weight
+ * pattern from expert_gate so up_proj is independently exercised. */
+static int test_expert_up_matches_scalar(void)
+{
+    enum { TOK = 2 };
+    size_t inter = (size_t)OLMOE_INTER, hidden = (size_t)OLMOE_HIDDEN;
+
+    olmoe_expert_t expert;
+    memset(&expert, 0, sizeof expert);
+    expert.up_proj = malloc(inter * hidden * sizeof *expert.up_proj);
+    olmoe_act_t *x = malloc(TOK * hidden * sizeof *x);
+    olmoe_act_t *out = malloc(TOK * inter * sizeof *out);
+    olmoe_act_t *scalar_out = malloc(TOK * inter * sizeof *scalar_out);
+    if (!expert.up_proj || !x || !out || !scalar_out) {
+        printf("FAIL: expert_up malloc OOM\n");
+        free(expert.up_proj); free(x); free(out); free(scalar_out);
+        return 1;
+    }
+
+    for (size_t j = 0; j < inter; ++j)
+        for (size_t l = 0; l < hidden; ++l)
+            expert.up_proj[j * hidden + l] =
+                f32_to_bf16((float)(((int)((j * hidden + l) % 11)) - 5) * 0.125f);
+    for (size_t i = 0; i < TOK; ++i)
+        for (size_t l = 0; l < hidden; ++l)
+            x[i * hidden + l] =
+                (float)(((int)((i * 5 + l * 3) % 17)) - 8) * 0.03125f;
+
+    olmoe_expert_up_forward(&expert, x, TOK, out);
+    scalar_matmul_bf16(scalar_out, x, expert.up_proj, TOK, inter, hidden);
+
+    int failed = lanes_match(out, scalar_out, TOK * inter);
+    free(expert.up_proj); free(x); free(out); free(scalar_out);
+    if (!failed) printf("PASS: expert_up matmul matches scalar\n");
+    else         printf("FAIL: expert_up matmul matches scalar\n");
+    return failed;
+}
+
 int test_engine_mlp_pass(void)
 {
     int failed = 0;
     failed += test_mlp_gate_matches_scalar();
     failed += test_expert_gate_matches_scalar();
+    failed += test_expert_up_matches_scalar();
     return failed;
 }

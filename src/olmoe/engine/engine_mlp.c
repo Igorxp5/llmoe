@@ -61,10 +61,11 @@ void olmoe_expert_gate_forward(const olmoe_expert_t *e,
 }
 
 void olmoe_expert_up_forward(const olmoe_expert_t *e,
-                             const olmoe_act_t *x, size_t n_tokens,
-                             olmoe_act_t *out)
+                              const olmoe_act_t *x, size_t n_tokens,
+                              olmoe_act_t *out)
 {
-    /* TODO: x @ up_proj^T -> out[n_tokens, inter]. */
+    expert_proj_forward(e->up_proj, x, n_tokens,
+                        (size_t)OLMOE_INTER, (size_t)OLMOE_HIDDEN, out);
 }
 
 void olmoe_expert_down_forward(const olmoe_expert_t *e,
