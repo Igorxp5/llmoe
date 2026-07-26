@@ -329,6 +329,37 @@ static int test_q_proj_matmul_matches_scalar(void)
     return failed;
 }
 
+/* Real-dim check of olmoe_k_proj_forward: full [hidden, hidden] k_proj
+ * weight (8 MiB BF16) at seq_len 2, all [2, hidden] output lanes compared
+ * against the scalar matmul. */
+static int test_k_proj_matmul_matches_scalar(void)
+{
+    enum { SEQ = 2 };
+    olmoe_self_attn_t attn;
+    memset(&attn, 0, sizeof attn);
+
+    size_t wn = (size_t)OLMOE_HIDDEN * OLMOE_HIDDEN;
+    olmoe_bf16_t *w = malloc(wn * sizeof *w);
+    if (!w) { printf("FAIL: k_proj malloc OOM\n"); return 1; }
+    for (size_t i = 0; i < wn; ++i)
+        w[i] = f32_to_bf16((float)(((int)(i % 19)) - 9) * 0.1f);
+    attn.k_proj = w;
+
+    olmoe_act_t x[SEQ * OLMOE_HIDDEN];
+    for (size_t i = 0; i < SEQ * OLMOE_HIDDEN; ++i)
+        x[i] = (float)((int)(i % 13)) / 100.0f - 0.06f;
+
+    olmoe_act_t got[SEQ * OLMOE_HIDDEN];
+    olmoe_act_t want[SEQ * OLMOE_HIDDEN];
+    olmoe_k_proj_forward(&attn, x, SEQ, got);
+    scalar_matmul_bf16(want, x, w, SEQ, OLMOE_HIDDEN, OLMOE_HIDDEN);
+
+    int failed = lanes_match(got, want, (size_t)SEQ * OLMOE_HIDDEN);
+    free(w);
+    if (!failed) printf("PASS: k_proj matmul matches scalar\n");
+    return failed;
+}
+
 /* ---------- dispatcher --------------------------------------------------- */
 
 int test_engine_stubs_pass(void)
@@ -342,5 +373,6 @@ int test_engine_stubs_pass(void)
     failed += test_input_ln_matches_scalar();
     failed += test_lm_head_matmul_matches_scalar();
     failed += test_q_proj_matmul_matches_scalar();
+    failed += test_k_proj_matmul_matches_scalar();
     return failed;
 }
