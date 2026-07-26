@@ -1,10 +1,12 @@
 /* Embedding + LM head ops (1:1 with OLMOE_KIND_EMBED / OLMOE_KIND_LM_HEAD).
- * embed_forward is real; lm_head_forward is stubbed until the matmul PR. */
+ * embed_forward is real; lm_head_forward reduces x @ lm_head^T to the shared
+ * AVX512-BF16 matmul kernel (kernels/cpu_matmul.h). */
 
 #include <stddef.h>
 
 #include "olmoe/engine/engine.h"
 #include "olmoe/engine/engine_internal.h"
+#include "olmoe/engine/kernels/cpu_matmul.h"
 
 void olmoe_embed_forward(const olmoe_model_t *m,
                          const int *token_ids, size_t seq_len,
@@ -23,5 +25,5 @@ void olmoe_lm_head_forward(const olmoe_model_t *m,
                            const olmoe_act_t *x, size_t seq_len,
                            olmoe_act_t *logits_out)
 {
-    /* TODO: x @ lm_head^T -> logits[seq, vocab]. */
+    cpu_matmul_bf16(logits_out, x, m->lm_head, seq_len, OLMOE_VOCAB, OLMOE_HIDDEN);
 }
