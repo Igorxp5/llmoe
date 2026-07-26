@@ -5,10 +5,9 @@
 
 #include "olmoe/layers/layers.h"
 
-/* Activation dtype. Stored and computed in FP32 during the stub phase;
- * swapping to BF16 later only needs a one-line change here, not a rewrite
- * of every call site. Weights remain BF16 (`olmoe_bf16_t`); conversion is
- * deferred to the per-op impls (TODO when real matmul lands). */
+/* Activation dtype. Computed in FP32 throughout the engine. Weights remain
+ * BF16 (`olmoe_bf16_t`); the per-op impls promote BF16 lanes to FP32 on the
+ * fly via the AVX512-BF16 conversion intrinsic in engine_internal.h. */
 typedef float olmoe_act_t;
 
 /* Engine-wide status. Stubs only ever return OLMOE_OK or OLMOE_ERR_NULL. */
@@ -25,6 +24,14 @@ typedef enum {
  * layout generator only bakes quantities derivable from the safetensors
  * index. */
 #define OLMOE_N_EXPERTS_PER_TOK 8
+
+/* Topology constants NOT derivable from the safetensors index (config.json
+ * fields): q/k/v_proj are all [hidden, hidden] so head count / head dim /
+ * rope_theta cannot be recovered from tensor shapes. Baked here so the
+ * router/loader need not read config at runtime. */
+#define OLMOE_NUM_HEADS   16
+#define OLMOE_HEAD_DIM    128
+#define OLMOE_ROPE_THETA  10000.0
 
 /* Caller-owned activation buffers for a single forward pass. The engine
  * never mallocs activations: the caller allocates once via
@@ -68,7 +75,7 @@ void olmoe_scratch_free(olmoe_scratch_t *s);
  * Each op reads BF16 weights from a loaded `olmoe_model_t` and reads/writes
  * caller-owned `olmoe_act_t` buffers. These are pure compute: they trust the
  * integrator (olmoe_forward) to have validated args and seq_len, and return
- * void. Real compute lands in a later PR. */
+ * void. */
 
 /* OLMOE_KIND_EMBED: token-id lookup into embed_tokens->[vocab, hidden]. */
 void olmoe_embed_forward(const olmoe_model_t *m,
@@ -145,9 +152,10 @@ void olmoe_expert_down_forward(const olmoe_expert_t *e,
                                olmoe_act_t *out);
 
 /* Top-level orchestrator. Wires the per-kind ops above in the OLMoE forward
- * order using `scratch` for intermediate storage. Stubs: returns OLMOE_OK
- * after NULL checks. Lifetime: `m` and `scratch` are borrowed for the call;
- * `logits_out` is caller-owned (commonly `scratch->logits`).
+ * order using `scratch` for intermediate storage. `m->n_layers` drives the
+ * per-layer loop (not the baked OLMOE_N_LAYERS), so synthetic low-RAM models
+ * may set n_layers smaller. Lifetime: `m` and `scratch` are borrowed for the
+ * call; `logits_out` is caller-owned (commonly `scratch->logits`).
  *
  * Example:
  *     olmoe_scratch_t s;

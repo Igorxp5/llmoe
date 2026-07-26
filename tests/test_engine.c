@@ -9,6 +9,7 @@
 int test_engine_matmul_pass(void);
 int test_engine_norm_pass(void);
 int test_engine_mlp_pass(void);
+int test_engine_fwd_pass(void);
 
 /* ---------- checks ------------------------------------------------------ */
 
@@ -59,24 +60,25 @@ static int test_scratch_free_null_is_safe(void)
     return 0;
 }
 
-/* olmoe_forward stub: a zeroed model is acceptable because the orchestrator
- * only NULL-checks its direct args (per-kind ops are not called by the
- * stub yet). */
-static int test_forward_stub_returns_ok(void)
+/* olmoe_forward with seq_len==0 short-circuits before touching weights, so
+ * a zeroed/empty model is acceptable input (exercises the kept zero-seq
+ * contract; the real impl would otherwise dereference a NULL embed table). */
+static int test_forward_zero_seq_returns_ok(void)
 {
     olmoe_scratch_t s;
     olmoe_scratch_init(&s, 4);
     olmoe_model_t empty_model;
     memset(&empty_model, 0, sizeof empty_model);
+
     int ids[] = {1, 2, 3, 4};
 
     int failed = 0;
-    olmoe_status_t st = olmoe_forward(&empty_model, ids, 4, &s, s.logits);
+    olmoe_status_t st = olmoe_forward(&empty_model, ids, 0, &s, s.logits);
     if (st != OLMOE_OK) {
-        printf("FAIL: forward(stub) -> %d (want OK)\n", st);
+        printf("FAIL: forward(seq=0) -> %d (want OK)\n", st);
         ++failed;
     }
-    if (!failed) printf("PASS: forward stub returns OK\n");
+    if (!failed) printf("PASS: forward zero-seq returns OK\n");
     olmoe_scratch_free(&s);
     return failed;
 }
@@ -110,10 +112,11 @@ int test_engine_stubs_pass(void)
     failed += test_scratch_init_free_roundtrip();
     failed += test_scratch_init_null_returns_err();
     failed += test_scratch_free_null_is_safe();
-    failed += test_forward_stub_returns_ok();
+    failed += test_forward_zero_seq_returns_ok();
     failed += test_forward_oversize_seq_returns_shape();
     failed += test_engine_matmul_pass();
     failed += test_engine_norm_pass();
     failed += test_engine_mlp_pass();
+    failed += test_engine_fwd_pass();
     return failed;
 }
