@@ -32,7 +32,7 @@ void olmoe_v_proj_forward(const olmoe_self_attn_t *a,
                           const olmoe_act_t *x, size_t seq_len,
                           olmoe_act_t *out)
 {
-    /* TODO: x @ v_proj^T -> out[seq, hidden]. */
+    attn_proj_forward(a->v_proj, x, seq_len, out);
 }
 
 void olmoe_o_proj_forward(const olmoe_self_attn_t *a,
