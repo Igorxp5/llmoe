@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <signal.h>
 
 #include "olmoe/engine/engine.h"
 #include "olmoe/tokenizer/tokenizer.h"
@@ -9,6 +10,14 @@
 #define MAX_SEQ_LEN 2048
 #define MAX_LINE 8192
 #define EOS_TOKEN_ID 50279
+
+static volatile sig_atomic_t stop_flag = 0;
+
+static void handle_sigint(int sig)
+{
+    (void)sig;
+    stop_flag = 1;
+}
 
 static int usage(const char *prog)
 {
@@ -31,6 +40,15 @@ int main(int argc, char **argv)
     olmoe_scratch_t s;
     olmoe_token_id_t *tokens = NULL;
     int rc = 0;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGINT, &sa, NULL) != 0) {
+        perror("sigaction");
+    }
 
     memset(&s, 0, sizeof(s));
 
@@ -62,6 +80,10 @@ int main(int argc, char **argv)
     char line[MAX_LINE];
 
     for (;;) {
+        if (stop_flag) {
+            fprintf(stderr, "\n");
+            break;
+        }
         fprintf(stderr, "> ");
         if (!fgets(line, sizeof(line), stdin)) {
             fprintf(stderr, "\n");
@@ -112,6 +134,7 @@ int main(int argc, char **argv)
 
         clock_gettime(CLOCK_MONOTONIC, &gen_t0);
         for (; seq_len < MAX_SEQ_LEN; ++seq_len) {
+            if (stop_flag) break;
             if (olmoe_forward(m, (int *)tokens, seq_len, &s, s.logits)
                 != OLMOE_OK) {
                 fprintf(stderr, "forward failed at step %zu\n", seq_len);
@@ -149,11 +172,13 @@ int main(int argc, char **argv)
         }
         clock_gettime(CLOCK_MONOTONIC, &gen_t1);
 
+        fflush(stdout);
         if (dec_len > 0) printf("\n");
 
         fprintf(stderr, "[debug] output tokens: %zu, speed: %.2f tok/s\n",
                 output_tokens,
                 output_tokens / elapsed(gen_t0, gen_t1));
+        stop_flag = 0;
     }
 
 out:
