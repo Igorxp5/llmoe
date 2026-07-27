@@ -12,6 +12,7 @@ void olmoe_embed_forward(const olmoe_model_t *m,
                          const int *token_ids, size_t seq_len,
                          olmoe_act_t *hidden_out)
 {
+    #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < seq_len; ++i) {
         const olmoe_bf16_t *row = m->embed_tokens + (size_t)token_ids[i] * OLMOE_HIDDEN;
         olmoe_act_t *out = hidden_out + i * OLMOE_HIDDEN;

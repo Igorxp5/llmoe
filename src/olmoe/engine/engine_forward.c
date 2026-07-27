@@ -89,6 +89,7 @@ void olmoe_scratch_free(olmoe_scratch_t *s)
  * carrying the live residual stream in exactly one place. */
 static void add_residual(olmoe_act_t *out, const olmoe_act_t *x, size_t n)
 {
+    #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < n; ++i) out[i] += x[i];
 }
 
@@ -140,9 +141,10 @@ static void moe_block(const olmoe_layer_t *L, const olmoe_act_t *x,
     olmoe_post_ln_forward(L->post_attention_layernorm, x, seq, s->ctx);
     olmoe_mlp_gate_forward(L->mlp_gate, s->ctx, seq, s->topk_idx, s->topk_w);
     memset(s->expert_out, 0, seq * (size_t)OLMOE_HIDDEN * sizeof(olmoe_act_t));
-    float gate[OLMOE_INTER], up[OLMOE_INTER], act[OLMOE_INTER];
-    float down[OLMOE_HIDDEN];
+    #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < seq; ++i) {
+        float gate[OLMOE_INTER], up[OLMOE_INTER], act[OLMOE_INTER];
+        float down[OLMOE_HIDDEN];
         const olmoe_act_t *tok = s->ctx + i * (size_t)OLMOE_HIDDEN;
         olmoe_act_t *acc = s->expert_out + i * (size_t)OLMOE_HIDDEN;
         for (size_t r = 0; r < (size_t)OLMOE_N_EXPERTS_PER_TOK; ++r) {

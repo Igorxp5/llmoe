@@ -4,6 +4,7 @@ CFLAGS   = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
            -fPIC -ffunction-sections -fdata-sections \
            -g -O2 \
            -Wno-discarded-qualifiers \
+           -fopenmp \
            -DIREE_ALLOCATOR_SYSTEM_CTL=iree_allocator_libc_ctl
 
 # ── IREE installation (built via CMake) ──────────────────────────────────────

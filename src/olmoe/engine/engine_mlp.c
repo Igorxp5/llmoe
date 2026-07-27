@@ -36,6 +36,7 @@ void olmoe_mlp_gate_forward(const olmoe_bf16_t *w,
     size_t n = (size_t)OLMOE_N_EXPERTS, k = (size_t)OLMOE_N_EXPERTS_PER_TOK;
     float *logits = malloc(seq_len * n * sizeof(float));
     cpu_matmul_bf16(logits, x, w, seq_len, n, (size_t)OLMOE_HIDDEN);
+    #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < seq_len; ++i)
         route_one_token(logits + i * n, topk_idx + i * k,
                         topk_w + i * k, n, k);

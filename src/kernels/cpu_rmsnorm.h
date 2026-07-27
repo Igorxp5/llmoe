@@ -42,6 +42,7 @@ static inline void cpu_rmsnorm(float *out, const float *x,
                                 const uint16_t *w, size_t seq_len,
                                 size_t n, float eps)
 {
+    #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < seq_len; ++i) {
         size_t off = i * n;
         cpu_rmsnorm_row(out + off, x + off, w, n, eps);

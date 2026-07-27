@@ -22,11 +22,11 @@ static inline void apply_rope_head(float *x, size_t head_dim, float pos,
 static inline void cpu_rope(float *x, size_t seq_len, size_t n_heads,
                             size_t head_dim, float theta)
 {
-    for (size_t i = 0; i < seq_len; ++i) {
-        float *row = x + i * n_heads * head_dim;
+    #pragma omp parallel for schedule(static) collapse(2)
+    for (size_t i = 0; i < seq_len; ++i)
         for (size_t h = 0; h < n_heads; ++h)
-            apply_rope_head(row + h * head_dim, head_dim, (float)i, theta);
-    }
+            apply_rope_head(x + i * n_heads * head_dim + h * head_dim,
+                            head_dim, (float)i, theta);
 }
 
 #endif /* KERNELS_CPU_ROPE_H */

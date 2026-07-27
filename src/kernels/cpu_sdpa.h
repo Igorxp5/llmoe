@@ -39,13 +39,14 @@ static inline void cpu_sdpa(float *out, const float *q,
                             size_t seq_len, size_t n_heads, size_t head_dim,
                             float scale)
 {
-    float *scores = (float *)malloc(seq_len * sizeof(float));
+    #pragma omp parallel for schedule(static)
     for (size_t h = 0; h < n_heads; ++h) {
+        float *scores = (float *)malloc(seq_len * sizeof(float));
         size_t off = h * head_dim;
         sdpa_one_head(out + off, q + off, k + off, v + off, seq_len, n_heads,
                       head_dim, scale, scores);
+        free(scores);
     }
-    free(scores);
 }
 
 #endif /* KERNELS_CPU_SDPA_H */
