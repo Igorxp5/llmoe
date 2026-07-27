@@ -5,8 +5,8 @@
 #include <stdbool.h>
 
 #include "olmoe/engine/engine.h"
-#include "olmoe/engine/kernels/cpu_softmax.h"
-#include "olmoe/engine/kernels/cpu_topk.h"
+#include "kernels/cpu_softmax.h"
+#include "kernels/cpu_topk.h"
 
 #include "test_engine_helpers.h"
 

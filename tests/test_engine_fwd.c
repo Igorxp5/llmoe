@@ -5,9 +5,9 @@
 #include <string.h>
 
 #include "olmoe/engine/engine.h"
-#include "olmoe/engine/kernels/cpu_rope.h"
-#include "olmoe/engine/kernels/cpu_sdpa.h"
-#include "olmoe/engine/kernels/cpu_silu.h"
+#include "kernels/cpu_rope.h"
+#include "kernels/cpu_sdpa.h"
+#include "kernels/cpu_silu.h"
 
 #include "test_engine_helpers.h"
 

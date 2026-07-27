@@ -5,25 +5,7 @@
  * public API; only `engine_*.c` files under src/olmoe/engine include this.
  * Public callers use engine.h. */
 
-#include <immintrin.h>
-
 #include "olmoe/engine/engine.h"
-
-/* Scoped AVX512 enablement for the inline helper below and any engine TU
- * that includes this header. All 15 engine ops live in their own .c under
- * src/olmoe/engine/, so only those TUs get the feature; nothing else is
- * affected. */
-#pragma GCC target("avx512f,avx512bw,avx512vl,avx512bf16")
-
-/* Load 16 BF16 (uint16) lanes and promote to 16 FP32 lanes using the
- * dedicated AVX512-BF16 conversion intrinsic. _mm512_cvtpbh_ps takes a
- * __m256i of packed BF16 and emits a __m512 of FP32. Used by both the
- * RMSNorm ops (input_ln) and the embedding row-gather. */
-static inline __m512 olmoe_engine_bf16x16_to_fp32(const olmoe_bf16_t *p)
-{
-    __m256i src = _mm256_loadu_si256((const __m256i *)p);
-    return _mm512_cvtpbh_ps((__m256bh)src);
-}
 
 /* Compute n * elemsz and require the result to fit in size_t. Returns 0 on
  * overflow. Used by olmoe_scratch_init before each malloc. Header-inline so

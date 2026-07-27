@@ -2,11 +2,8 @@
  * K_NORM). The shared AVX512 core lives in kernels/cpu_rmsnorm.h; see
  * docs/engine_module.md. */
 
-#include <math.h>
-
 #include "olmoe/engine/engine.h"
-#include "olmoe/engine/engine_internal.h"
-#include "olmoe/engine/kernels/cpu_rmsnorm.h"
+#include "kernels/cpu_rmsnorm.h"
 
 /* RMSNorm epsilon. config.json does not carry rms_norm_eps, so this matches
  * the HF OlmEConfig default (1e-5). Shared by every norm kind in this TU. */

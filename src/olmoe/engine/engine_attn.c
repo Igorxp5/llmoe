@@ -3,7 +3,7 @@
  * compute itself (RoPE + sdpa) is a future op living in this file. */
 
 #include "olmoe/engine/engine.h"
-#include "olmoe/engine/kernels/cpu_matmul.h"
+#include "kernels/cpu_matmul.h"
 
 /* Shared by the four attn projections (q/k/v/o) so the matmul call site is
  * written once, not copy-pasted four times. */

@@ -5,8 +5,8 @@
 #include <stddef.h>
 
 #include "olmoe/engine/engine.h"
-#include "olmoe/engine/engine_internal.h"
-#include "olmoe/engine/kernels/cpu_matmul.h"
+#include "kernels/kernels.h"
+#include "kernels/cpu_matmul.h"
 
 void olmoe_embed_forward(const olmoe_model_t *m,
                          const int *token_ids, size_t seq_len,
@@ -16,7 +16,7 @@ void olmoe_embed_forward(const olmoe_model_t *m,
         const olmoe_bf16_t *row = m->embed_tokens + (size_t)token_ids[i] * OLMOE_HIDDEN;
         olmoe_act_t *out = hidden_out + i * OLMOE_HIDDEN;
         for (size_t k = 0; k < OLMOE_HIDDEN; k += 16) {
-            _mm512_storeu_ps(out + k, olmoe_engine_bf16x16_to_fp32(row + k));
+            _mm512_storeu_ps(out + k, kernels_bf16x16_to_fp32(row + k));
         }
     }
 }

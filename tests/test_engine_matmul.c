@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "olmoe/engine/engine.h"
-#include "olmoe/engine/kernels/cpu_matmul.h"
+#include "kernels/cpu_matmul.h"
 
 #include "test_engine_helpers.h"
 

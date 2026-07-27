@@ -10,7 +10,7 @@ produces activations the caller owns.
 point (NULL + `scratch->seq_len >= seq_len` + `seq_len == 0` guards); the
 14 per-kind ops are pure compute returning `void`, trusting the integrator
 to have validated args. Computation lives in header-only kernels under
-`src/olmoe/engine/kernels/`:
+`src/kernels/`:
 
   - `cpu_matmul.h`   — BF16-weight x FP32-act matmul (AVX512-BF16 + FMA)
   - `cpu_rmsnorm.h`   — RMSNorm with BF16 weight promotion (AVX512)
@@ -134,22 +134,24 @@ and loader never read `config.json` at runtime:
 ## File layout
 
 ```
-src/olmoe/engine/
-    engine.h             public API (olmoe_act_t, status, scratch, 15 ops)
-    engine_internal.h    shared internal helpers (safe_array_size, BF16->FP32)
-    engine_embed.c       embed + lm_head
-    engine_norm.c        final / input / post / q / k norms
-    engine_attn.c        q / k / v / o projections
-    engine_mlp.c         mlp router + 3 expert weight ops
-    engine_forward.c     olmoe_forward integrator + scratch_init / free
+src/
     kernels/
-      cpu_matmul.h       cpu_matmul_bf16 (AVX512-BF16 + FMA)
-      cpu_rmsnorm.h      cpu_rmsnorm (AVX512)
-      cpu_softmax.h      cpu_softmax
-      cpu_topk.h         cpu_topk_desc
-      cpu_rope.h         cpu_rope (HF rotate_half)
-      cpu_sdpa.h         cpu_sdpa (causal MHA)
-      cpu_silu.h         cpu_silu
+        kernels.h            shared AVX512 helpers (BF16->FP32 converter)
+        cpu_matmul.h         cpu_matmul_bf16 (AVX512-BF16 + FMA)
+        cpu_rmsnorm.h        cpu_rmsnorm (AVX512)
+        cpu_softmax.h        cpu_softmax
+        cpu_topk.h           cpu_topk_desc
+        cpu_rope.h           cpu_rope (HF rotate_half)
+        cpu_sdpa.h           cpu_sdpa (causal MHA)
+        cpu_silu.h           cpu_silu
+    olmoe/engine/
+        engine.h             public API (olmoe_act_t, status, scratch, 15 ops)
+        engine_internal.h    shared internal helpers (safe_array_size)
+        engine_embed.c       embed + lm_head
+        engine_norm.c        final / input / post / q / k norms
+        engine_attn.c        q / k / v / o projections
+        engine_mlp.c         mlp router + 3 expert weight ops
+        engine_forward.c     olmoe_forward integrator + scratch_init / free
 ```
 
 Each `.c` is well under the 500-line limit; math kernels are header-only

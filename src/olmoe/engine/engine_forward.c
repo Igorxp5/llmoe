@@ -8,9 +8,9 @@
 
 #include "olmoe/engine/engine.h"
 #include "olmoe/engine/engine_internal.h"
-#include "olmoe/engine/kernels/cpu_rope.h"
-#include "olmoe/engine/kernels/cpu_sdpa.h"
-#include "olmoe/engine/kernels/cpu_silu.h"
+#include "kernels/cpu_rope.h"
+#include "kernels/cpu_sdpa.h"
+#include "kernels/cpu_silu.h"
 
 static olmoe_act_t *alloc_act_buffer(size_t n)
 {

@@ -1,17 +1,10 @@
-#ifndef OLMOE_KERNEL_CPU_SOFTMAX_H
-#define OLMOE_KERNEL_CPU_SOFTMAX_H
+#ifndef KERNELS_CPU_SOFTMAX_H
+#define KERNELS_CPU_SOFTMAX_H
 
 #include <math.h>
 
-#include "olmoe/engine/engine_internal.h"
+#include "kernels/kernels.h"
 
-/* Numerically stable softmax over a single row of n floats:
- * subtract the row max before expf so the largest exponent is 0.
- *
- * Example:
- *     float probs[OLMOE_N_EXPERTS];
- *     cpu_softmax(probs, logits_row, OLMOE_N_EXPERTS);
- */
 static inline float cpu_softmax_row_max(const float *in, size_t n)
 {
     float mx = in[0];
@@ -32,4 +25,4 @@ static inline void cpu_softmax(float *out, const float *in, size_t n)
         out[r] /= sum;
 }
 
-#endif /* OLMOE_KERNEL_CPU_SOFTMAX_H */
+#endif /* KERNELS_CPU_SOFTMAX_H */

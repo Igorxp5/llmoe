@@ -5,9 +5,9 @@
 #include <stdlib.h>
 
 #include "olmoe/engine/engine.h"
-#include "olmoe/engine/kernels/cpu_matmul.h"
-#include "olmoe/engine/kernels/cpu_softmax.h"
-#include "olmoe/engine/kernels/cpu_topk.h"
+#include "kernels/cpu_matmul.h"
+#include "kernels/cpu_softmax.h"
+#include "kernels/cpu_topk.h"
 
 /* OLMoE renormalizes the top-K softmax weights over the selected experts
  * so they sum to 1 (HF OlmoeSparseMoE semantics). */
