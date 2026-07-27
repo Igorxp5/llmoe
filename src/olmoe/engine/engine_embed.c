@@ -26,5 +26,5 @@ void olmoe_lm_head_forward(const olmoe_model_t *m,
                            const olmoe_act_t *x, size_t seq_len,
                            olmoe_act_t *logits_out)
 {
-    cpu_matmul_bf16(logits_out, x, m->lm_head, seq_len, OLMOE_VOCAB, OLMOE_HIDDEN);
+    cpu_matmul_bf16(logits_out + ((seq_len - 1) * OLMOE_VOCAB), x + ((seq_len - 1) * OLMOE_HIDDEN), m->lm_head, 1, OLMOE_VOCAB, OLMOE_HIDDEN);
 }

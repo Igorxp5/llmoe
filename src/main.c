@@ -115,16 +115,7 @@ int main(int argc, char **argv)
             continue;
         }
 
-        size_t n_tok = olmoe_tokenize(prompt, NULL, 0);
-        if (n_tok == 0) {
-            fprintf(stderr, "[debug] empty tokenization\n");
-            continue;
-        }
-        if (n_tok > MAX_SEQ_LEN) {
-            fprintf(stderr, "[debug] context full, ignoring input\n");
-            continue;
-        }
-        olmoe_tokenize(prompt, tokens, (size_t)n_tok);
+        size_t n_tok = olmoe_tokenize(prompt, tokens, (size_t)MAX_SEQ_LEN);
         seq_len = n_tok;
         fprintf(stderr, "[debug] input tokens: %zu\n", n_tok);
 
