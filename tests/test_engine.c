@@ -18,9 +18,9 @@ int test_engine_fwd_pass(void);
 static int test_scratch_init_free_roundtrip(void)
 {
     olmoe_scratch_t s;
-    olmoe_status_t st = olmoe_scratch_init(&s, 16);
+    olmoe_status_t st = olmoe_scratch_init(&s, 16, 0);
     if (st != OLMOE_OK) {
-        printf("FAIL: scratch_init(16) -> %d (want OK)\n", st);
+        printf("FAIL: scratch_init(16,0) -> %d (want OK)\n", st);
         return 1;
     }
     int failed = 0;
@@ -43,7 +43,7 @@ static int test_scratch_init_free_roundtrip(void)
 /* init(NULL) must not dereference; returns OLMOE_ERR_NULL. */
 static int test_scratch_init_null_returns_err(void)
 {
-    olmoe_status_t st = olmoe_scratch_init(NULL, 8);
+    olmoe_status_t st = olmoe_scratch_init(NULL, 8, 0);
     if (st != OLMOE_ERR_NULL) {
         printf("FAIL: scratch_init(NULL) -> %d (want ERR_NULL)\n", st);
         return 1;
@@ -66,14 +66,14 @@ static int test_scratch_free_null_is_safe(void)
 static int test_forward_zero_seq_returns_ok(void)
 {
     olmoe_scratch_t s;
-    olmoe_scratch_init(&s, 4);
+    olmoe_scratch_init(&s, 4, 0);
     olmoe_model_t empty_model;
     memset(&empty_model, 0, sizeof empty_model);
 
     int ids[] = {1, 2, 3, 4};
 
     int failed = 0;
-    olmoe_status_t st = olmoe_forward(&empty_model, ids, 0, &s, s.logits);
+    olmoe_status_t st = olmoe_forward(&empty_model, ids, 0, 0, &s, s.logits);
     if (st != OLMOE_OK) {
         printf("FAIL: forward(seq=0) -> %d (want OK)\n", st);
         ++failed;
@@ -87,13 +87,13 @@ static int test_forward_zero_seq_returns_ok(void)
 static int test_forward_oversize_seq_returns_shape(void)
 {
     olmoe_scratch_t s;
-    olmoe_scratch_init(&s, 4);
+    olmoe_scratch_init(&s, 4, 0);
     olmoe_model_t empty_model;
     memset(&empty_model, 0, sizeof empty_model);
     int ids[] = {1, 2, 3, 4, 5, 6, 7, 8};
 
     int failed = 0;
-    olmoe_status_t st = olmoe_forward(&empty_model, ids, 8, &s, s.logits);
+    olmoe_status_t st = olmoe_forward(&empty_model, ids, 8, 0, &s, s.logits);
     if (st != OLMOE_ERR_SHAPE) {
         printf("FAIL: forward(seq=8 on scratch=4) -> %d (want ERR_SHAPE)\n", st);
         ++failed;

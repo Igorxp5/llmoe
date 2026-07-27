@@ -63,7 +63,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "[debug] Loaded model: %zu layers (%.3f s)\n",
             m->n_layers, elapsed(load_t0, load_t1));
 
-    if (olmoe_scratch_init(&s, MAX_SEQ_LEN) != OLMOE_OK) {
+    if (olmoe_scratch_init(&s, MAX_SEQ_LEN, MAX_SEQ_LEN) != OLMOE_OK) {
         fprintf(stderr, "scratch init failed\n");
         rc = 2;
         goto out;
@@ -76,7 +76,6 @@ int main(int argc, char **argv)
         goto out;
     }
 
-    size_t seq_len = 0;
     char line[MAX_LINE];
 
     for (;;) {
@@ -116,43 +115,68 @@ int main(int argc, char **argv)
         }
 
         size_t n_tok = olmoe_tokenize(prompt, tokens, (size_t)MAX_SEQ_LEN);
-        seq_len = n_tok;
         fprintf(stderr, "[debug] input tokens: %zu\n", n_tok);
 
-        size_t gen_start = seq_len;
+        /* Reset KV cache for the new conversation turn. */
+        s.cache_len = 0;
+
         size_t output_tokens = 0;
         size_t dec_len = 0;
+        int next_token = 0;
+        float best_val;
 
         clock_gettime(CLOCK_MONOTONIC, &gen_t0);
-        for (; seq_len < MAX_SEQ_LEN; ++seq_len) {
-            if (stop_flag) break;
-            if (olmoe_forward(m, (int *)tokens, seq_len, &s, s.logits)
+
+        /* Prefill: process the entire prompt and populate the KV cache. */
+        if (n_tok > 0) {
+            if (olmoe_forward(m, (int *)tokens, n_tok, 0, &s, s.logits)
                 != OLMOE_OK) {
-                fprintf(stderr, "forward failed at step %zu\n", seq_len);
+                fprintf(stderr, "prefill failed\n");
+                break;
+            }
+            /* Sample first generated token from the last prompt position. */
+            size_t last = n_tok - 1;
+            next_token = 0;
+            best_val = s.logits[last * OLMOE_VOCAB];
+            for (int v = 1; v < OLMOE_VOCAB; ++v) {
+                float val = s.logits[last * OLMOE_VOCAB + v];
+                if (val > best_val) { best_val = val; next_token = v; }
+            }
+            if (next_token != EOS_TOKEN_ID) {
+                tokens[n_tok] = (olmoe_token_id_t)next_token;
+                output_tokens = 1;
+            }
+        }
+
+        /* Decode loop: generate one token at a time using the KV cache. */
+        for (size_t pos = n_tok; pos + 1 < MAX_SEQ_LEN; ++pos) {
+            if (stop_flag) break;
+            if (output_tokens == 0) break;
+
+            if (olmoe_forward(m, (int *)&tokens[pos], 1, pos, &s, s.logits)
+                != OLMOE_OK) {
+                fprintf(stderr, "forward failed at pos %zu\n", pos);
                 break;
             }
 
-            size_t last = seq_len - 1;
-            int best_tok = 0;
-            float best_val = s.logits[last * OLMOE_VOCAB];
+            /* Sample from the single-token logits. */
+            next_token = 0;
+            best_val = s.logits[0];
             for (int v = 1; v < OLMOE_VOCAB; ++v) {
-                float val = s.logits[last * OLMOE_VOCAB + v];
-                if (val > best_val) {
-                    best_val = val;
-                    best_tok = v;
-                }
+                float val = s.logits[v];
+                if (val > best_val) { best_val = val; next_token = v; }
             }
 
-            if (best_tok == EOS_TOKEN_ID) break;
-            tokens[seq_len] = (olmoe_token_id_t)best_tok;
+            if (next_token == EOS_TOKEN_ID) break;
+            tokens[pos + 1] = (olmoe_token_id_t)next_token;
             output_tokens++;
 
-            size_t new_len = olmoe_decode(tokens + gen_start,
+            size_t new_len = olmoe_decode(tokens + n_tok,
                                           output_tokens, NULL, 0);
             if (new_len > dec_len) {
                 char *dec = malloc(new_len + 1);
                 if (dec) {
-                    olmoe_decode(tokens + gen_start, output_tokens,
+                    olmoe_decode(tokens + n_tok, output_tokens,
                                  dec, new_len + 1);
                     fwrite(dec + dec_len, 1, new_len - dec_len, stdout);
                     fflush(stdout);
@@ -164,7 +188,7 @@ int main(int argc, char **argv)
         clock_gettime(CLOCK_MONOTONIC, &gen_t1);
 
         fflush(stdout);
-        if (dec_len > 0) printf("\n");
+        if (output_tokens > 0) printf("\n");
 
         fprintf(stderr, "[debug] output tokens: %zu, speed: %.2f tok/s\n",
                 output_tokens,

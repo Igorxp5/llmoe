@@ -24,7 +24,8 @@ static olmoe_act_t *alloc_act_buffer(size_t n)
     return (olmoe_act_t *)malloc(bytes);
 }
 
-olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len)
+olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len,
+                                   size_t max_cache_len)
 {
     if (!s) {
         return OLMOE_ERR_NULL;
@@ -36,7 +37,7 @@ olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len)
     size_t v_cnt   = olmoe_engine_safe_array_size(seq_len, OLMOE_VOCAB);
     size_t r_cnt   = olmoe_engine_safe_array_size(seq_len, OLMOE_N_EXPERTS);
     size_t k_cnt   = olmoe_engine_safe_array_size(seq_len,
-                                                  OLMOE_N_EXPERTS_PER_TOK);
+                                                   OLMOE_N_EXPERTS_PER_TOK);
     size_t i_cnt   = olmoe_engine_safe_array_size(seq_len, OLMOE_INTER);
     if (!h_cnt || !v_cnt || !r_cnt || !k_cnt || !i_cnt) {
         return OLMOE_ERR_SHAPE;
@@ -61,6 +62,23 @@ olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len)
         return OLMOE_ERR_ALLOC;
     }
     s->seq_len = seq_len;
+
+    /* Optional KV cache — allocated only when max_cache_len > 0. */
+    if (max_cache_len > 0) {
+        size_t cache_cnt = olmoe_engine_safe_array_size(
+            (size_t)OLMOE_N_LAYERS * max_cache_len, OLMOE_HIDDEN);
+        if (!cache_cnt) {
+            olmoe_scratch_free(s);
+            return OLMOE_ERR_SHAPE;
+        }
+        s->cache_k = alloc_act_buffer(cache_cnt);
+        s->cache_v = alloc_act_buffer(cache_cnt);
+        if (!s->cache_k || !s->cache_v) {
+            olmoe_scratch_free(s);
+            return OLMOE_ERR_ALLOC;
+        }
+        s->max_cache_len = max_cache_len;
+    }
     return OLMOE_OK;
 }
 
@@ -81,6 +99,8 @@ void olmoe_scratch_free(olmoe_scratch_t *s)
     free(s->expert_in);
     free(s->expert_out);
     free(s->logits);
+    free(s->cache_k);
+    free(s->cache_v);
     memset(s, 0, sizeof *s);
 }
 
@@ -93,12 +113,15 @@ static void add_residual(olmoe_act_t *out, const olmoe_act_t *x, size_t n)
     for (size_t i = 0; i < n; ++i) out[i] += x[i];
 }
 
-/* Attention block: input_ln -> q/k/v_proj -> q/k_norm -> RoPE q/k -> causal
- * SDPA -> o_proj, then residual x added into `out`. s->ctx is reused as
- * both the post-input_ln normed buffer (consumed by the projections) and
- * then the SDPA output buffer (overwritten once the projections are done).*/
+/* Attention block with KV-cache support.  When s->cache_len > 0 the
+ * function skips the full causal SDPA and instead runs incremental
+ * attention for the `seq` new tokens against the cached K/V history.
+ *
+ * K/V for the current tokens are stored into the cache *before* the
+ * SDPA step so the incremental kernel sees its own position too. */
 static void attention_block(const olmoe_layer_t *L, const olmoe_act_t *x,
-                            size_t seq, olmoe_scratch_t *s, olmoe_act_t *out)
+                            size_t seq, size_t pos, size_t l,
+                            olmoe_scratch_t *s, olmoe_act_t *out)
 {
     olmoe_input_ln_forward(L->input_layernorm, x, seq, s->ctx);
     olmoe_q_proj_forward(&L->self_attn, s->ctx, seq, s->q);
@@ -106,11 +129,34 @@ static void attention_block(const olmoe_layer_t *L, const olmoe_act_t *x,
     olmoe_v_proj_forward(&L->self_attn, s->ctx, seq, s->v);
     olmoe_q_norm_forward(L->self_attn.q_norm, s->q, seq);
     olmoe_k_norm_forward(L->self_attn.k_norm, s->k, seq);
-    cpu_rope(s->q, seq, OLMOE_NUM_HEADS, OLMOE_HEAD_DIM, OLMOE_ROPE_THETA);
-    cpu_rope(s->k, seq, OLMOE_NUM_HEADS, OLMOE_HEAD_DIM, OLMOE_ROPE_THETA);
+    cpu_rope(s->q, seq, pos, OLMOE_NUM_HEADS, OLMOE_HEAD_DIM, OLMOE_ROPE_THETA);
+    cpu_rope(s->k, seq, pos, OLMOE_NUM_HEADS, OLMOE_HEAD_DIM, OLMOE_ROPE_THETA);
+
+    /* Store K/V into the per-layer KV cache (if available). */
+    if (s->cache_k) {
+        size_t layer_offset = l * s->max_cache_len * (size_t)OLMOE_HIDDEN;
+        size_t slot_offset = pos * (size_t)OLMOE_HIDDEN;
+        size_t n = seq * (size_t)OLMOE_HIDDEN;
+        memcpy(s->cache_k + layer_offset + slot_offset, s->k,
+               n * sizeof(olmoe_act_t));
+        memcpy(s->cache_v + layer_offset + slot_offset, s->v,
+               n * sizeof(olmoe_act_t));
+    }
+
     float scale = 1.0f / sqrtf((float)OLMOE_HEAD_DIM);
-    cpu_sdpa(s->ctx, s->q, s->k, s->v, seq, OLMOE_NUM_HEADS,
-             OLMOE_HEAD_DIM, scale);
+    if (s->cache_len > 0) {
+        /* Incremental decode: compute attention only for the new tokens. */
+        size_t layer_offset = l * s->max_cache_len * (size_t)OLMOE_HIDDEN;
+        cpu_sdpa_incremental(s->ctx, s->q,
+                             s->cache_k + layer_offset,
+                             s->cache_v + layer_offset,
+                             seq, pos, OLMOE_NUM_HEADS,
+                             OLMOE_HEAD_DIM, scale);
+    } else {
+        /* First call (prefill, no history): full causal SDPA. */
+        cpu_sdpa(s->ctx, s->q, s->k, s->v, seq, OLMOE_NUM_HEADS,
+                 OLMOE_HEAD_DIM, scale);
+    }
     olmoe_o_proj_forward(&L->self_attn, s->ctx, seq, out);
     add_residual(out, x, seq * (size_t)OLMOE_HIDDEN);
 }
@@ -160,14 +206,16 @@ static void moe_block(const olmoe_layer_t *L, const olmoe_act_t *x,
  * block (residual into the same out). `out` ends the layer holding the
  * live residual stream for the next layer; `x` is this layer's input. */
 static void run_layer(const olmoe_layer_t *L, const olmoe_act_t *x,
-                      size_t seq, olmoe_scratch_t *s, olmoe_act_t *out)
+                      size_t seq, size_t pos, size_t l,
+                      olmoe_scratch_t *s, olmoe_act_t *out)
 {
-    attention_block(L, x, seq, s, out);
+    attention_block(L, x, seq, pos, l, s, out);
     moe_block(L, out, seq, s, out);
 }
 
 olmoe_status_t olmoe_forward(const olmoe_model_t *m, const int *token_ids,
-                             size_t seq_len, olmoe_scratch_t *scratch,
+                             size_t seq_len, size_t pos,
+                             olmoe_scratch_t *scratch,
                              olmoe_act_t *logits_out)
 {
     if (!m || !token_ids || !scratch || !logits_out) {
@@ -179,16 +227,28 @@ olmoe_status_t olmoe_forward(const olmoe_model_t *m, const int *token_ids,
     if (seq_len == 0) {
         return OLMOE_OK;
     }
+    /* Check KV-cache capacity (if cache is active). */
+    if (scratch->max_cache_len > 0 &&
+        pos + seq_len > scratch->max_cache_len) {
+        return OLMOE_ERR_SHAPE;
+    }
     olmoe_embed_forward(m, token_ids, seq_len, scratch->hidden_in);
     olmoe_act_t *h_in = scratch->hidden_in;
     olmoe_act_t *h_out = scratch->hidden_out;
     /* Loop over m->n_layers (not the baked OLMOE_N_LAYERS) so a synthetic
      * low-RAM model may set n_layers smaller for end-to-end validation. */
     for (size_t l = 0; l < m->n_layers; ++l) {
-        run_layer(&m->layers[l], h_in, seq_len, scratch, h_out);
+        run_layer(&m->layers[l], h_in, seq_len, pos, l, scratch, h_out);
         olmoe_act_t *tmp = h_in; h_in = h_out; h_out = tmp;
     }
     olmoe_final_norm_forward(m->norm, h_in, seq_len, h_out);
     olmoe_lm_head_forward(m, h_out, seq_len, logits_out);
+    /* Update cached token count for the next incremental call. */
+    if (scratch->max_cache_len > 0) {
+        size_t end = pos + seq_len;
+        if (end > scratch->cache_len) {
+            scratch->cache_len = end;
+        }
+    }
     return OLMOE_OK;
 }

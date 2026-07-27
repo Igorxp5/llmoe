@@ -67,7 +67,7 @@ static int test_rope_matches_scalar(void)
             pre_norm[hh*SEQ+i] = s;
         }
 
-    cpu_rope(q, SEQ, NH, HD, OLMOE_ROPE_THETA);
+    cpu_rope(q, SEQ, 0, NH, HD, OLMOE_ROPE_THETA);
     scalar_rope(ref, saved, SEQ, NH, HD, OLMOE_ROPE_THETA);
 
     int failed = 0;
@@ -367,9 +367,9 @@ static int test_forward_end_to_end_matches_scalar(void)
 
     int ids[SEQ] = {5, 7};
     olmoe_scratch_t s;
-    olmoe_scratch_init(&s, SEQ);
+    olmoe_scratch_init(&s, SEQ, 0);
     olmoe_act_t *got = s.logits;
-    olmoe_status_t st = olmoe_forward(&m, ids, SEQ, &s, got);
+    olmoe_status_t st = olmoe_forward(&m, ids, SEQ, 0, &s, got);
     if (st != OLMOE_OK) { printf("FAIL: e2e forward -> %d\n", st); return 1; }
 
     olmoe_act_t *want = malloc(SEQ*V*sizeof(olmoe_act_t));

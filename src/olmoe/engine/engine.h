@@ -40,7 +40,11 @@ typedef enum {
  *
  * Every member is capacity `seq_len` (the value passed to init) along the
  * sequence dimension; the hidden/inter/vocab extents are the baked
- * OLMOE_* constants. */
+ * OLMOE_* constants.
+ *
+ * When `max_cache_len > 0` the engine also allocates per-layer K/V caches
+ * dimensioned [max_cache_len, OLMOE_HIDDEN] so that incremental decode
+ * only computes Q/K/V/attention for the new token. */
 typedef struct {
     olmoe_act_t *hidden_in;     /* [seq, OLMOE_HIDDEN]                */
     olmoe_act_t *hidden_out;    /* [seq, OLMOE_HIDDEN]                */
@@ -54,19 +58,27 @@ typedef struct {
     olmoe_act_t *expert_in;     /* [seq, OLMOE_INTER]  chosen-expert in */
     olmoe_act_t *expert_out;    /* [seq, OLMOE_HIDDEN] mlp accumulate  */
     olmoe_act_t *logits;        /* [seq, OLMOE_VOCAB]  caller-visible  */
-    size_t       seq_len;       /* capacity sized by init             */
+    size_t       seq_len;       /* work-buffer capacity                */
+    olmoe_act_t *cache_k;       /* [OLMOE_N_LAYERS * max_cache_len * OLMOE_HIDDEN] */
+    olmoe_act_t *cache_v;       /* [OLMOE_N_LAYERS * max_cache_len * OLMOE_HIDDEN] */
+    size_t       max_cache_len; /* KV cache capacity per layer (0 = no cache) */
+    size_t       cache_len;     /* current cached token count          */
 } olmoe_scratch_t;
 
-/* Size a scratch for `seq_len` tokens and fill all pointer fields.
+/* Size a scratch for `seq_len` tokens and optionally allocate a KV cache
+ * for `max_cache_len` tokens per layer.  Pass `max_cache_len=0` to skip
+ * KV-cache allocation (the engine falls back to full-recompute for every
+ * forward call, preserving the pre-cache behaviour).
  * Returns OLMOE_ERR_NULL if `s` is NULL, OLMOE_ERR_ALLOC on malloc failure.
  *
  * Example:
  *     olmoe_scratch_t s;
- *     if (olmoe_scratch_init(&s, 64) != OLMOE_OK) return 1;
- *     ... olmoe_forward(m, ids, 64, &s, s.logits) ...
+ *     if (olmoe_scratch_init(&s, 64, 0) != OLMOE_OK) return 1;
+ *     ... olmoe_forward(m, ids, 64, 0, &s, s.logits) ...
  *     olmoe_scratch_free(&s);
  */
-olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len);
+olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len,
+                                   size_t max_cache_len);
 
 /* Release every buffer in `s` and zero the struct. NULL-safe. */
 void olmoe_scratch_free(olmoe_scratch_t *s);
@@ -152,19 +164,26 @@ void olmoe_expert_down_forward(const olmoe_expert_t *e,
                                olmoe_act_t *out);
 
 /* Top-level orchestrator. Wires the per-kind ops above in the OLMoE forward
- * order using `scratch` for intermediate storage. `m->n_layers` drives the
- * per-layer loop (not the baked OLMOE_N_LAYERS), so synthetic low-RAM models
- * may set n_layers smaller. Lifetime: `m` and `scratch` are borrowed for the
- * call; `logits_out` is caller-owned (commonly `scratch->logits`).
+ * order using `scratch` for intermediate storage. `pos` is the absolute
+ * position of the first token in `token_ids` within the full sequence;
+ * pass 0 for prefill and the current cached length for incremental decode.
+ * `m->n_layers` drives the per-layer loop (not the baked OLMOE_N_LAYERS),
+ * so synthetic low-RAM models may set n_layers smaller.
+ * Lifetime: `m` and `scratch` are borrowed for the call; `logits_out` is
+ * caller-owned (commonly `scratch->logits`).
  *
- * Example:
+ * Example (prefill):
  *     olmoe_scratch_t s;
- *     olmoe_scratch_init(&s, seq_len);
- *     olmoe_forward(m, ids, seq_len, &s, s.logits);
+ *     olmoe_scratch_init(&s, seq_len, max_cache_len);
+ *     olmoe_forward(m, ids, seq_len, 0, &s, s.logits);
+ * Example (incremental decode):
+ *     int next = best_token;
+ *     olmoe_forward(m, &next, 1, pos, &s, s.logits);
  *     olmoe_scratch_free(&s);
  */
 olmoe_status_t olmoe_forward(const olmoe_model_t *m, const int *token_ids,
-                             size_t seq_len, olmoe_scratch_t *scratch,
+                             size_t seq_len, size_t pos,
+                             olmoe_scratch_t *scratch,
                              olmoe_act_t *logits_out);
 
 #endif /* OLMOE_ENGINE_H */
