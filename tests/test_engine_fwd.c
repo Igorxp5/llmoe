@@ -195,27 +195,6 @@ static void scalar_rmsnorm_inplace(olmoe_act_t *x, const olmoe_bf16_t *w,
     }
 }
 
-/* Per-head RMSNorm for QK norm: normalizes each head's OLMOE_HEAD_DIM lanes
- * independently, using the corresponding slice of the weight vector. */
-static void scalar_rmsnorm_qk_inplace(olmoe_act_t *x, const olmoe_bf16_t *w,
-                                      size_t seq, size_t n_heads,
-                                      size_t head_dim)
-{
-    size_t n = n_heads * head_dim;
-    for (size_t i = 0; i < seq; ++i) {
-        for (size_t h = 0; h < n_heads; ++h) {
-            size_t off = i * n + h * head_dim;
-            olmoe_act_t *xr = x + off;
-            float ss = 0.0f;
-            for (size_t k = 0; k < head_dim; ++k) ss += xr[k] * xr[k];
-            float sc = 1.0f / sqrtf(ss / (float)head_dim + LN_EPS);
-            const olmoe_bf16_t *hw = w + h * head_dim;
-            for (size_t k = 0; k < head_dim; ++k)
-                xr[k] = xr[k] * sc * bf16_to_f32(hw[k]);
-        }
-    }
-}
-
 static void scalar_softmax(float *out, const float *in, size_t n)
 {
     float mx = in[0]; for (size_t r=1;r<n;++r) if (in[r]>mx) mx=in[r];
@@ -283,8 +262,8 @@ static void scalar_forward(const olmoe_model_t *m, const int *ids, size_t seq,
         scalar_matmul_bf16(q, normed, L->self_attn.q_proj, seq, H, H);
         scalar_matmul_bf16(k, normed, L->self_attn.k_proj, seq, H, H);
         scalar_matmul_bf16(v, normed, L->self_attn.v_proj, seq, H, H);
-        scalar_rmsnorm_qk_inplace(q, L->self_attn.q_norm, seq, NH, HD);
-        scalar_rmsnorm_qk_inplace(k, L->self_attn.k_norm, seq, NH, HD);
+        scalar_rmsnorm(q, q, L->self_attn.q_norm, seq, H);
+        scalar_rmsnorm(k, k, L->self_attn.k_norm, seq, H);
         scalar_rope_inplace(q, seq, NH, HD, OLMOE_ROPE_THETA);
         scalar_rope_inplace(k, seq, NH, HD, OLMOE_ROPE_THETA);
         scalar_sdpa(ctx, q, k, v, seq, NH, HD, 1.0f/sqrtf((float)HD));

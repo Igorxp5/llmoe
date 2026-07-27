@@ -86,7 +86,7 @@ int main(int argc, char **argv)
          * attention / KV-cache engineering out of scope). */
         char prompt[MAX_LINE + 128];
         int p_len = snprintf(prompt, sizeof(prompt),
-                             "<|endoftext|>\n<|user|>\n%s\n<|assistant|>\n",
+                             "<|endoftext|>\n<|user|>\n%s\n<|assistant|>",
                              line);
         if (p_len < 0 || (size_t)p_len >= sizeof(prompt)) {
             fprintf(stderr, "[debug] prompt too long\n");
