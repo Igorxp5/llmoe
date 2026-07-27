@@ -73,17 +73,37 @@ int main(int argc, char **argv)
             line[linelen - 1] = '\0';
         if (line[0] == '\0') continue;
 
-        size_t n_tok = olmoe_tokenize(line, NULL, 0);
+        /* Wrap user input in the OLMoE instruct chat template so the
+         * model receives the instruction format it was trained on:
+         *
+         *     <|endoftext|>
+         *     <|user|>
+         *     {user_input}
+         *     <|assistant|>
+         *
+         * Each prompt is self-contained: seq_len resets per turn rather
+         * than accumulating (multi-turn accumulation requires sparse-
+         * attention / KV-cache engineering out of scope). */
+        char prompt[MAX_LINE + 128];
+        int p_len = snprintf(prompt, sizeof(prompt),
+                             "<|endoftext|>\n<|user|>\n%s\n<|assistant|>\n",
+                             line);
+        if (p_len < 0 || (size_t)p_len >= sizeof(prompt)) {
+            fprintf(stderr, "[debug] prompt too long\n");
+            continue;
+        }
+
+        size_t n_tok = olmoe_tokenize(prompt, NULL, 0);
         if (n_tok == 0) {
             fprintf(stderr, "[debug] empty tokenization\n");
             continue;
         }
-        if (seq_len + n_tok > MAX_SEQ_LEN) {
+        if (n_tok > MAX_SEQ_LEN) {
             fprintf(stderr, "[debug] context full, ignoring input\n");
             continue;
         }
-        olmoe_tokenize(line, tokens + seq_len, n_tok);
-        seq_len += n_tok;
+        olmoe_tokenize(prompt, tokens, (size_t)n_tok);
+        seq_len = n_tok;
         fprintf(stderr, "[debug] input tokens: %zu\n", n_tok);
 
         size_t gen_start = seq_len;

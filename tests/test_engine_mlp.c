@@ -11,9 +11,8 @@
 #include "test_engine_helpers.h"
 
 /* Scalar reference for the OLMoE router: numerically stable softmax over
- * n_experts, then top-K descending with smallest-index tie-break, then
- * renormalize the K selected weights to sum to 1. Mirrors the kernel's
- * semantics so the only divergence is FP32 round-off. */
+ * n_experts, then top-K descending with smallest-index tie-break.
+ * norm_topk_prob is false for this model, so no renormalization. */
 static void scalar_softmax(float *out, const float *in, size_t n)
 {
     float mx = in[0];
@@ -132,7 +131,6 @@ static int test_mlp_gate_matches_scalar(void)
         scalar_softmax(probs, logits + i * n, n);
         scalar_topk_desc(probs, n, k,
                          want_idx + i * k, (float *)want_w + i * k);
-        scalar_renorm((float *)want_w + i * k, k);
     }
 
     int failed = compare_router_outputs(got_idx, want_idx,

@@ -64,8 +64,33 @@ static int test_input_ln_matches_scalar(void)
     return failed;
 }
 
-/* Pure-C scalar in-place RMSNorm reference for q_norm; out is a separate
- * buffer so it never aliases x, even though the SIMD op writes in-place. */
+/* Per-head scalar RMSNorm reference for QK norm: OLMoE normalizes each
+ * head's OLMOE_HEAD_DIM lanes independently using the corresponding slice
+ * of the weight vector. `out` is separate from `x` so in-place aliasing
+ * never hides a bug. The flat norm used by input_ln/post_ln/final_norm
+ * is tested separately via scalar_input_ln / scalar_rmsnorm_inplace above. */
+static void scalar_rmsnorm_qk(const olmoe_bf16_t *w,
+                               const olmoe_act_t *x, size_t seq_len,
+                               olmoe_act_t *out)
+{
+    const float eps = 1e-5f;
+    for (size_t i = 0; i < seq_len; ++i) {
+        for (size_t h = 0; h < OLMOE_NUM_HEADS; ++h) {
+            size_t off = i * OLMOE_HIDDEN + h * OLMOE_HEAD_DIM;
+            const olmoe_act_t *xr = x + off;
+            olmoe_act_t *or_ = out + off;
+            float ss = 0.0f;
+            for (size_t k = 0; k < OLMOE_HEAD_DIM; ++k) ss += xr[k] * xr[k];
+            float scale = 1.0f / sqrtf(ss / (float)OLMOE_HEAD_DIM + eps);
+            const olmoe_bf16_t *hw = w + h * OLMOE_HEAD_DIM;
+            for (size_t k = 0; k < OLMOE_HEAD_DIM; ++k)
+                or_[k] = xr[k] * scale * bf16_to_f32(hw[k]);
+        }
+    }
+}
+
+/* Pure-C scalar flat RMSNorm reference for q_norm (the old incorrect
+ * behaviour); preserved so tests do not regress the non-qk norm ops. */
 static void scalar_rmsnorm_inplace(const olmoe_bf16_t *w,
                                     const olmoe_act_t *x, size_t seq_len,
                                     olmoe_act_t *out)
@@ -106,7 +131,7 @@ static int test_q_norm_matches_scalar(void)
 
     memcpy(q_copy, q, sizeof q);
     olmoe_q_norm_forward(w, q, ROWS);
-    scalar_rmsnorm_inplace(w, q_copy, ROWS, want);
+    scalar_rmsnorm_qk(w, q_copy, ROWS, want);
 
     int failed = 0;
     for (size_t i = 0; i < ROWS * OLMOE_HIDDEN && !failed; ++i) {
@@ -143,7 +168,7 @@ static int test_k_norm_matches_scalar(void)
 
     memcpy(k_copy, k, sizeof k);
     olmoe_k_norm_forward(w, k, ROWS);
-    scalar_rmsnorm_inplace(w, k_copy, ROWS, want);
+    scalar_rmsnorm_qk(w, k_copy, ROWS, want);
 
     int failed = lanes_match(k, want, (size_t)ROWS * OLMOE_HIDDEN);
     if (failed) printf("FAIL: k_norm matches scalar RMSNorm\n");

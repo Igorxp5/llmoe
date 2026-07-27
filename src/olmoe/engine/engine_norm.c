@@ -39,13 +39,31 @@ void olmoe_post_ln_forward(const olmoe_bf16_t *w,
 void olmoe_q_norm_forward(const olmoe_bf16_t *w,
                            olmoe_act_t *q, size_t seq_len)
 {
-    /* In-place: each row's read pass completes before its write pass. */
-    cpu_rmsnorm(q, q, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
+    /* OLMoE QK norm is per-head: each of the OLMOE_NUM_HEADS heads
+     * (OLMOE_HEAD_DIM lanes) is independently RMS-normed using the
+     * corresponding slice of the weight vector. The full-weight flat norm
+     * that input_ln/post_ln use would cross-contaminate head statistics. */
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (size_t i = 0; i < seq_len; ++i) {
+        for (size_t h = 0; h < OLMOE_NUM_HEADS; ++h) {
+            size_t off = i * OLMOE_HIDDEN + h * OLMOE_HEAD_DIM;
+            cpu_rmsnorm_row(q + off, q + off,
+                            w + h * OLMOE_HEAD_DIM,
+                            OLMOE_HEAD_DIM, INPUT_LN_EPS);
+        }
+    }
 }
 
 void olmoe_k_norm_forward(const olmoe_bf16_t *w,
                            olmoe_act_t *k, size_t seq_len)
 {
-    /* In-place over k; same kernel as q_norm (q/k norms are identical ops). */
-    cpu_rmsnorm(k, k, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (size_t i = 0; i < seq_len; ++i) {
+        for (size_t h = 0; h < OLMOE_NUM_HEADS; ++h) {
+            size_t off = i * OLMOE_HIDDEN + h * OLMOE_HEAD_DIM;
+            cpu_rmsnorm_row(k + off, k + off,
+                            w + h * OLMOE_HEAD_DIM,
+                            OLMOE_HEAD_DIM, INPUT_LN_EPS);
+        }
+    }
 }

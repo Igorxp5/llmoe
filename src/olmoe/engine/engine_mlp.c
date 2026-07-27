@@ -18,15 +18,15 @@ static void renorm_to_sum_one(olmoe_act_t *w, size_t k)
     for (size_t r = 0; r < k; ++r) w[r] /= sum;
 }
 
-/* Route a single token's logits row: softmax over all experts, pick top-K,
- * renormalize the K weights to sum to 1. */
+/* Route a single token's logits row: softmax over all experts, pick top-K.
+ * OLMoE config has norm_topk_prob=false, so the selected weights are the raw
+ * softmax probabilities (not renormalized to sum to 1). */
 static void route_one_token(const float *logits_row, int *idx,
                             olmoe_act_t *w, size_t n_experts, size_t k)
 {
     float probs[64];
     cpu_softmax(probs, logits_row, n_experts);
     cpu_topk_desc(probs, n_experts, k, idx, w);
-    renorm_to_sum_one(w, k);
 }
 
 void olmoe_mlp_gate_forward(const olmoe_bf16_t *w,
