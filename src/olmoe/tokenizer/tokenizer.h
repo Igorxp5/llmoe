@@ -9,6 +9,27 @@
  * of tokenizer. */
 typedef uint32_t olmoe_token_id_t;
 
+/* Decode token IDs back to UTF-8 text.
+ *
+ * Returns the number of bytes needed (excluding NUL).  When `out` is
+ * non-NULL and `cap` is large enough to hold the result, also fills
+ * `out[0..n)` with decoded UTF-8 bytes and NUL-terminates.  The output
+ * buffer is owned by the caller.
+ *
+ * When `cap` is smaller than the required count, returns the required
+ * count and writes nothing to `out` (overflow probe).  Pass cap=0 with
+ * out=NULL to query the length before allocating.
+ *
+ * Returns 0 for NULL input or an empty token list.
+ *
+ * Example:
+ *     size_t n = olmoe_decode(ids, cnt, NULL, 0);
+ *     char *buf = malloc(n + 1);
+ *     olmoe_decode(ids, cnt, buf, n + 1);
+ */
+size_t olmoe_decode(const olmoe_token_id_t *ids, size_t n_ids,
+                    char *out, size_t cap);
+
 /* Tokenize a NUL-terminated UTF-8 string.
  *
  * Returns the number of token ids needed for `text`.  When `out` is non-NULL

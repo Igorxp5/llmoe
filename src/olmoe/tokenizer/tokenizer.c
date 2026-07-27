@@ -1,6 +1,7 @@
 #include "tokenizer.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "vendor/iree/runtime/src/iree/base/api.h"
@@ -98,4 +99,39 @@ size_t olmoe_tokenize(const char* text, olmoe_token_id_t* out, size_t cap)
     }
     iree_allocator_free(iree_allocator_system(), scratch);
     return count;
+}
+
+size_t olmoe_decode(const olmoe_token_id_t *ids, size_t n_ids,
+                    char *out, size_t cap)
+{
+    if (!ids || n_ids == 0) return 0;
+    if (!ensure_tokenizer()) return 0;
+
+    iree_tokenizer_token_id_list_t list = iree_tokenizer_make_token_id_list(
+        (const iree_tokenizer_token_id_t *)ids, (iree_host_size_t)n_ids);
+
+    iree_host_size_t buf_cap = n_ids * 8 + 256;
+    char *buf = malloc(buf_cap);
+    if (!buf) return 0;
+
+    iree_host_size_t out_len = 0;
+    iree_status_t s = iree_tokenizer_decode(g_tokenizer, list,
+        IREE_TOKENIZER_DECODE_FLAG_SKIP_SPECIAL_TOKENS,
+        iree_make_mutable_string_view(buf, buf_cap),
+        iree_allocator_system(), &out_len);
+
+    if (!iree_status_is_ok(s)) {
+        iree_status_ignore(s);
+        free(buf);
+        return 0;
+    }
+
+    if (out && cap > 0) {
+        size_t n = (size_t)out_len < cap - 1 ? (size_t)out_len : cap - 1;
+        memcpy(out, buf, n);
+        out[n] = '\0';
+    }
+
+    free(buf);
+    return (size_t)out_len;
 }
