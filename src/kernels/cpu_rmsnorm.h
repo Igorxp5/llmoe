@@ -5,47 +5,54 @@
 
 #include "kernels/kernels.h"
 
-static inline float cpu_rmsnorm_scale(const float *row, size_t n,
-                                       float eps)
+/* Compute 1 / sqrt(mean(input_row^2) + epsilon) for an RMSNorm row.
+ * `input_row` has length `dim`. The loop strides by 16 (AVX-512 register width). */
+static inline float cpu_rmsnorm_scale(const float *input_row, size_t dim,
+                                       float epsilon)
 {
     __m512 acc = _mm512_setzero_ps();
-    for (size_t k = 0; k < n; k += 16) {
-        __m512 v = _mm512_loadu_ps(row + k);
+    for (size_t k = 0; k < dim; k += 16) {
+        __m512 v = _mm512_loadu_ps(input_row + k);
         acc = _mm512_add_ps(acc, _mm512_mul_ps(v, v));
     }
     float sum = _mm512_reduce_add_ps(acc);
-    return 1.0f / sqrtf(sum / (float)n + eps);
+    return 1.0f / sqrtf(sum / (float)dim + epsilon);
 }
 
-static inline void cpu_rmsnorm_apply(float *out,
-                                      const float *x, float scale,
-                                      const uint16_t *w, size_t n)
+/* Apply the pre-computed RMSNorm scale factor: output = input * scale * weight */
+static inline void cpu_rmsnorm_apply(float *output,
+                                      const float *input,
+                                      float scale_factor,
+                                      const uint16_t *weight, size_t dim)
 {
-    __m512 vscale = _mm512_set1_ps(scale);
-    for (size_t k = 0; k < n; k += 16) {
-        __m512 vx = _mm512_loadu_ps(x + k);
-        __m512 vw = kernels_bf16x16_to_fp32(w + k);
+    __m512 vscale = _mm512_set1_ps(scale_factor);
+    for (size_t k = 0; k < dim; k += 16) {
+        __m512 vx = _mm512_loadu_ps(input + k);
+        __m512 vw = kernels_bf16x16_to_fp32(weight + k);
         __m512 vout = _mm512_mul_ps(_mm512_mul_ps(vx, vscale), vw);
-        _mm512_storeu_ps(out + k, vout);
+        _mm512_storeu_ps(output + k, vout);
     }
 }
 
-static inline void cpu_rmsnorm_row(float *out, const float *x,
-                                    const uint16_t *w, size_t n,
-                                    float eps)
+/* Full RMSNorm on one row: output = input / sqrt(mean(input^2) + epsilon) * weight */
+static inline void cpu_rmsnorm_row(float *output, const float *input,
+                                    const uint16_t *weight, size_t dim,
+                                    float epsilon)
 {
-    float scale = cpu_rmsnorm_scale(x, n, eps);
-    cpu_rmsnorm_apply(out, x, scale, w, n);
+    float scale = cpu_rmsnorm_scale(input, dim, epsilon);
+    cpu_rmsnorm_apply(output, input, scale, weight, dim);
 }
 
-static inline void cpu_rmsnorm(float *out, const float *x,
-                                const uint16_t *w, size_t seq_len,
-                                size_t n, float eps)
+/* Batched RMSNorm over `num_rows` vectors of length `dim`.
+ * Each row i: output[i] = input[i] / sqrt(mean(input[i]^2) + epsilon) * weight */
+static inline void cpu_rmsnorm(float *output, const float *input,
+                                const uint16_t *weight, size_t num_rows,
+                                size_t dim, float epsilon)
 {
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < seq_len; ++i) {
-        size_t off = i * n;
-        cpu_rmsnorm_row(out + off, x + off, w, n, eps);
+    for (size_t i = 0; i < num_rows; ++i) {
+        size_t off = i * dim;
+        cpu_rmsnorm_row(output + off, input + off, weight, dim, epsilon);
     }
 }
 

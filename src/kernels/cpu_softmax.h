@@ -5,24 +5,28 @@
 
 #include "kernels/kernels.h"
 
-static inline float cpu_softmax_row_max(const float *in, size_t n)
+/* Find the maximum value in `input` of length `dim` (numerical-stability
+ * helper for softmax). */
+static inline float cpu_softmax_row_max(const float *input, size_t dim)
 {
-    float mx = in[0];
-    for (size_t r = 1; r < n; ++r)
-        if (in[r] > mx) mx = in[r];
+    float mx = input[0];
+    for (size_t r = 1; r < dim; ++r)
+        if (input[r] > mx) mx = input[r];
     return mx;
 }
 
-static inline void cpu_softmax(float *out, const float *in, size_t n)
+/* Stable softmax: output[i] = exp(input[i] - max) / sum(exp(input - max)).
+ * Both vectors have length `dim`. */
+static inline void cpu_softmax(float *output, const float *input, size_t dim)
 {
-    float mx = cpu_softmax_row_max(in, n);
+    float mx = cpu_softmax_row_max(input, dim);
     float sum = 0.0f;
-    for (size_t r = 0; r < n; ++r) {
-        out[r] = expf(in[r] - mx);
-        sum += out[r];
+    for (size_t r = 0; r < dim; ++r) {
+        output[r] = expf(input[r] - mx);
+        sum += output[r];
     }
-    for (size_t r = 0; r < n; ++r)
-        out[r] /= sum;
+    for (size_t r = 0; r < dim; ++r)
+        output[r] /= sum;
 }
 
 #endif /* KERNELS_CPU_SOFTMAX_H */
