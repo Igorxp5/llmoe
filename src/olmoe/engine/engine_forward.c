@@ -189,6 +189,56 @@ static inline void expert_accumulate(const olmoe_expert_t * restrict e,
                                          _mm512_loadu_ps(acc_row + h)));
 }
 
+/* Resolve the (token, expert-slot) routing pair and fold that expert's
+ * scaled contribution into `acc_row`. `acc_row` MUST be private to the
+ * calling iteration: concurrent iterations may fold the same token's slots
+ * into it, and expert_accumulate's final loop is a non-atomic RMW. */
+static inline void expert_accumulate_slot(const olmoe_layer_t * restrict L,
+                                          const olmoe_scratch_t * restrict s,
+                                          size_t i, size_t r,
+                                          olmoe_act_t * restrict acc_row)
+{
+    int e = s->topk_idx[i * OLMOE_N_EXPERTS_PER_TOK + r];
+    float w = s->topk_w[i * OLMOE_N_EXPERTS_PER_TOK + r];
+    float gate[OLMOE_INTER], up[OLMOE_INTER], act[OLMOE_INTER];
+    float down[OLMOE_HIDDEN];
+    expert_accumulate(&L->experts[e], s->ctx + i * (size_t)OLMOE_HIDDEN,
+                      acc_row, w, gate, up, down, act);
+}
+
+/* Decode (seq == 1): the token's 8 expert slots run on separate threads,
+ * each folding into its own row of `acc_slots` (disjoint writers, so the
+ * expert_accumulate RMW is race-free), then the rows are combined into
+ * s->expert_out in ascending slot order so the sum is bit-reproducible
+ * run-to-run. collapse(2) here was a data race — see
+ * docs/moe_expert_accumulate_race.md. */
+static void moe_block_decode(const olmoe_layer_t * restrict L,
+                             const olmoe_scratch_t * restrict s)
+{
+    olmoe_act_t acc_slots[OLMOE_N_EXPERTS_PER_TOK][OLMOE_HIDDEN] = {{0}};
+    #pragma omp parallel for schedule(static)
+    for (size_t r = 0; r < (size_t)OLMOE_N_EXPERTS_PER_TOK; ++r)
+        expert_accumulate_slot(L, s, 0, r, acc_slots[r]);
+    for (size_t r = 0; r < (size_t)OLMOE_N_EXPERTS_PER_TOK; ++r)
+        for (size_t h = 0; h < (size_t)OLMOE_HIDDEN; h += 16)
+            _mm512_storeu_ps(s->expert_out + h,
+                _mm512_add_ps(_mm512_loadu_ps(s->expert_out + h),
+                              _mm512_loadu_ps(acc_slots[r] + h)));
+}
+
+/* Prefill (seq > 1): one token per iteration; the token's 8 expert slots
+ * fold serially into its own row, which is disjoint across threads. */
+static void moe_block_prefill(const olmoe_layer_t * restrict L,
+                              const olmoe_scratch_t * restrict s,
+                              size_t seq)
+{
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < seq; ++i)
+        for (size_t r = 0; r < (size_t)OLMOE_N_EXPERTS_PER_TOK; ++r)
+            expert_accumulate_slot(L, s, i, r,
+                                   s->expert_out + i * (size_t)OLMOE_HIDDEN);
+}
+
 /* MoE block: post_ln(x) -> mlp_gate -> top-K expert dispatch with SiLU
  * gating and weighted down-projection accumulated into s->expert_out, then
  * residual added into `out`. s->ctx holds the post_ln output (normed2). */
@@ -202,18 +252,10 @@ static void moe_block(const olmoe_layer_t * restrict L, const olmoe_act_t *x,
     olmoe_post_ln_forward(L->post_attention_layernorm, x, seq, s->ctx);
     olmoe_mlp_gate_forward(L->mlp_gate, s->ctx, seq, s->topk_idx, s->topk_w);
     memset(s->expert_out, 0, seq * (size_t)OLMOE_HIDDEN * sizeof(olmoe_act_t));
-    #pragma omp parallel for schedule(static) collapse(2)
-    for (size_t i = 0; i < seq; ++i) {
-        float gate[OLMOE_INTER], up[OLMOE_INTER], act[OLMOE_INTER];
-        float down[OLMOE_HIDDEN];
-        const olmoe_act_t *tok = s->ctx + i * (size_t)OLMOE_HIDDEN;
-        olmoe_act_t *acc = s->expert_out + i * (size_t)OLMOE_HIDDEN;
-        for (size_t r = 0; r < (size_t)OLMOE_N_EXPERTS_PER_TOK; ++r) {
-            int e = s->topk_idx[i * OLMOE_N_EXPERTS_PER_TOK + r];
-            float w = s->topk_w[i * OLMOE_N_EXPERTS_PER_TOK + r];
-            expert_accumulate(&L->experts[e], tok, acc, w, gate, up, down, act);
-        }
-    }
+    if (__builtin_expect(seq == 1, 1))
+        moe_block_decode(L, s);
+    else
+        moe_block_prefill(L, s, seq);
     add_residual(out, s->expert_out, seq * (size_t)OLMOE_HIDDEN);
 }
 
