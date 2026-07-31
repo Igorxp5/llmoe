@@ -104,6 +104,18 @@ $(BUILD_DIR)/src/%.o: src/%.c $(TOKENIZER_INC) $(MODEL_LAYOUT_INC)
 $(BUILD_DIR)/tests/%.o: tests/%.c $(MODEL_LAYOUT_INC)
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
+# ── Listing files (.lst) ────────────────────────────────────────────────────
+LST_FILES      = $(OBJS:.o=.lst)
+TEST_LST_FILES = $(TEST_OBJS:.o=.lst)
+
+$(BUILD_DIR)/src/%.lst: $(BUILD_DIR)/src/%.o
+	objdump -d -S -l $< > $@
+
+$(BUILD_DIR)/tests/%.lst: $(BUILD_DIR)/tests/%.o
+	objdump -d -S -l $< > $@
+
+lst: $(LST_FILES) $(TEST_LST_FILES)
+
 # ── Link ────────────────────────────────────────────────────────────────────
 $(BUILD_DIR)/main: $(OBJS) | $(IREE_STAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
