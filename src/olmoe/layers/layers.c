@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include "olmoe/layers/layers.h"
 
@@ -191,10 +192,17 @@ olmoe_model_t *olmoe_model_load(const char *dir)
             return NULL;
         }
     }
+
+    if (mlock(m, sizeof *m) != 0)
+        perror("olmoe_model_load: mlock failed, weights may be swappable");
+
     return m;
 }
 
 void olmoe_model_free(olmoe_model_t *model)
 {
-    free(model);
+    if (model) {
+        munlock(model, sizeof *model);
+        free(model);
+    }
 }
