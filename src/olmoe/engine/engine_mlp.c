@@ -11,7 +11,7 @@
 
 /* OLMoE renormalizes the top-K softmax weights over the selected experts
  * so they sum to 1 (HF OlmoeSparseMoE semantics). */
-static void renorm_to_sum_one(olmoe_act_t *w, size_t k)
+static void renorm_to_sum_one(olmoe_act_t * restrict w, size_t k)
 {
     float sum = 0.0f;
     for (size_t r = 0; r < k; ++r) sum += w[r];
@@ -21,17 +21,19 @@ static void renorm_to_sum_one(olmoe_act_t *w, size_t k)
 /* Route a single token's logits row: softmax over all experts, pick top-K.
  * OLMoE config has norm_topk_prob=false, so the selected weights are the raw
  * softmax probabilities (not renormalized to sum to 1). */
-static void route_one_token(const float *logits_row, int *idx,
-                            olmoe_act_t *w, size_t n_experts, size_t k)
+static void route_one_token(const float * restrict logits_row,
+                            int * restrict idx, olmoe_act_t * restrict w,
+                            size_t n_experts, size_t k)
 {
     float probs[64];
     cpu_softmax(probs, logits_row, n_experts);
     cpu_topk_desc(probs, n_experts, k, idx, w);
 }
 
-void olmoe_mlp_gate_forward(const olmoe_bf16_t *w,
-                            const olmoe_act_t *x, size_t seq_len,
-                            int *topk_idx, olmoe_act_t *topk_w)
+void olmoe_mlp_gate_forward(const olmoe_bf16_t * restrict w,
+                            const olmoe_act_t * restrict x, size_t seq_len,
+                            int * restrict topk_idx,
+                            olmoe_act_t * restrict topk_w)
 {
     size_t n = (size_t)OLMOE_N_EXPERTS, k = (size_t)OLMOE_N_EXPERTS_PER_TOK;
     float *logits = malloc(seq_len * n * sizeof(float));
@@ -46,32 +48,33 @@ void olmoe_mlp_gate_forward(const olmoe_bf16_t *w,
 /* Shared by the three expert matmuls: gate/up project x [tok, hidden]
  * to [tok, inter], down projects x [tok, inter] back to [tok, hidden].
  * The dim roles are caller-supplied so each op names its own weight rows. */
-static void expert_proj_forward(const olmoe_bf16_t *w, const olmoe_act_t *x,
+static void expert_proj_forward(const olmoe_bf16_t * restrict w,
+                                const olmoe_act_t * restrict x,
                                 size_t n_tokens, size_t n_out, size_t k_in,
-                                olmoe_act_t *out)
+                                olmoe_act_t * restrict out)
 {
     cpu_matmul_bf16(out, x, w, n_tokens, n_out, k_in);
 }
 
-void olmoe_expert_gate_forward(const olmoe_expert_t *e,
-                               const olmoe_act_t *x, size_t n_tokens,
-                               olmoe_act_t *out)
+void olmoe_expert_gate_forward(const olmoe_expert_t * restrict e,
+                               const olmoe_act_t * restrict x, size_t n_tokens,
+                               olmoe_act_t * restrict out)
 {
     expert_proj_forward(e->gate_proj, x, n_tokens,
                         (size_t)OLMOE_INTER, (size_t)OLMOE_HIDDEN, out);
 }
 
-void olmoe_expert_up_forward(const olmoe_expert_t *e,
-                              const olmoe_act_t *x, size_t n_tokens,
-                              olmoe_act_t *out)
+void olmoe_expert_up_forward(const olmoe_expert_t * restrict e,
+                              const olmoe_act_t * restrict x, size_t n_tokens,
+                              olmoe_act_t * restrict out)
 {
     expert_proj_forward(e->up_proj, x, n_tokens,
                         (size_t)OLMOE_INTER, (size_t)OLMOE_HIDDEN, out);
 }
 
-void olmoe_expert_down_forward(const olmoe_expert_t *e,
-                               const olmoe_act_t *x, size_t n_tokens,
-                               olmoe_act_t *out)
+void olmoe_expert_down_forward(const olmoe_expert_t * restrict e,
+                               const olmoe_act_t * restrict x, size_t n_tokens,
+                               olmoe_act_t * restrict out)
 {
     expert_proj_forward(e->down_proj, x, n_tokens,
                         (size_t)OLMOE_HIDDEN, (size_t)OLMOE_INTER, out);

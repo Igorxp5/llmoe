@@ -9,35 +9,35 @@
  * the HF OlmEConfig default (1e-5). Shared by every norm kind in this TU. */
 static const float INPUT_LN_EPS = 1e-5f;
 
-void olmoe_final_norm_forward(const olmoe_bf16_t *w,
-                                const olmoe_act_t *x, size_t seq_len,
-                                olmoe_act_t *out)
+void olmoe_final_norm_forward(const olmoe_bf16_t * restrict w,
+                                const olmoe_act_t * restrict x, size_t seq_len,
+                                olmoe_act_t * restrict out)
 {
     /* Model-final RMSNorm before the LM head; same kernel/eps as input_ln. */
     cpu_rmsnorm(out, x, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }
 
-void olmoe_input_ln_forward(const olmoe_bf16_t *w,
-                             const olmoe_act_t *x, size_t seq_len,
-                             olmoe_act_t *out)
+void olmoe_input_ln_forward(const olmoe_bf16_t * restrict w,
+                             const olmoe_act_t * restrict x, size_t seq_len,
+                             olmoe_act_t * restrict out)
 {
-    /* out = x * rsqrt(mean(x^2) + eps) * w, per OLMoE HF RMSNorm. Out-of-place
-     * required; in-place (x == out) is also safe (each row finishes its read
-     * pass before its write pass). */
+    /* out = x * rsqrt(mean(x^2) + eps) * w, per OLMoE HF RMSNorm. Must be
+     * out-of-place: `out` and `x` are `restrict`-qualified, so aliasing them
+     * (in-place) is undefined. */
     cpu_rmsnorm(out, x, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }
 
-void olmoe_post_ln_forward(const olmoe_bf16_t *w,
-                            const olmoe_act_t *x, size_t seq_len,
-                            olmoe_act_t *out)
+void olmoe_post_ln_forward(const olmoe_bf16_t * restrict w,
+                            const olmoe_act_t * restrict x, size_t seq_len,
+                            olmoe_act_t * restrict out)
 {
-    /* Post-attention RMSNorm before the MLP; same kernel/eps as input_ln,
-     * applied out-of-place (see input_ln note on in-place safety). */
+    /* Post-attention RMSNorm before the MLP; same kernel/eps as input_ln.
+     * Must be out-of-place — see input_ln note. */
     cpu_rmsnorm(out, x, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }
 
-void olmoe_q_norm_forward(const olmoe_bf16_t *w,
-                           olmoe_act_t *q, size_t seq_len)
+void olmoe_q_norm_forward(const olmoe_bf16_t * restrict w,
+                           olmoe_act_t * restrict q, size_t seq_len)
 {
     /* OLMoE QK norm normalizes the flat hidden vector using the full 2048-dim
      * weight (HF: `self.q_norm(self.q_proj(hidden_states))` applied before the
@@ -45,8 +45,8 @@ void olmoe_q_norm_forward(const olmoe_bf16_t *w,
     cpu_rmsnorm(q, q, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }
 
-void olmoe_k_norm_forward(const olmoe_bf16_t *w,
-                           olmoe_act_t *k, size_t seq_len)
+void olmoe_k_norm_forward(const olmoe_bf16_t * restrict w,
+                           olmoe_act_t * restrict k, size_t seq_len)
 {
     cpu_rmsnorm(k, k, w, seq_len, OLMOE_HIDDEN, INPUT_LN_EPS);
 }

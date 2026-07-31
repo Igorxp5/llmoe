@@ -7,8 +7,8 @@
 
 /* Compute 1 / sqrt(mean(input_row^2) + epsilon) for an RMSNorm row.
  * `input_row` has length `dim`. The loop strides by 16 (AVX-512 register width). */
-static inline float cpu_rmsnorm_scale(const float *input_row, size_t dim,
-                                       float epsilon)
+static inline float cpu_rmsnorm_scale(const float * restrict input_row,
+                                       size_t dim, float epsilon)
 {
     __m512 acc = _mm512_setzero_ps();
     for (size_t k = 0; k < dim; k += 16) {
@@ -23,7 +23,8 @@ static inline float cpu_rmsnorm_scale(const float *input_row, size_t dim,
 static inline void cpu_rmsnorm_apply(float *output,
                                       const float *input,
                                       float scale_factor,
-                                      const uint16_t *weight, size_t dim)
+                                      const uint16_t * restrict weight,
+                                      size_t dim)
 {
     __m512 vscale = _mm512_set1_ps(scale_factor);
     for (size_t k = 0; k < dim; k += 16) {
@@ -36,8 +37,8 @@ static inline void cpu_rmsnorm_apply(float *output,
 
 /* Full RMSNorm on one row: output = input / sqrt(mean(input^2) + epsilon) * weight */
 static inline void cpu_rmsnorm_row(float *output, const float *input,
-                                    const uint16_t *weight, size_t dim,
-                                    float epsilon)
+                                    const uint16_t * restrict weight,
+                                    size_t dim, float epsilon)
 {
     float scale = cpu_rmsnorm_scale(input, dim, epsilon);
     cpu_rmsnorm_apply(output, input, scale, weight, dim);
@@ -46,8 +47,8 @@ static inline void cpu_rmsnorm_row(float *output, const float *input,
 /* Batched RMSNorm over `num_rows` vectors of length `dim`.
  * Each row i: output[i] = input[i] / sqrt(mean(input[i]^2) + epsilon) * weight */
 static inline void cpu_rmsnorm(float *output, const float *input,
-                                const uint16_t *weight, size_t num_rows,
-                                size_t dim, float epsilon)
+                                const uint16_t * restrict weight,
+                                size_t num_rows, size_t dim, float epsilon)
 {
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < num_rows; ++i) {

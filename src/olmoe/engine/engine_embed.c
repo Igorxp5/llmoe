@@ -8,9 +8,9 @@
 #include "kernels/kernels.h"
 #include "kernels/cpu_matmul.h"
 
-void olmoe_embed_forward(const olmoe_model_t *m,
-                         const int *token_ids, size_t seq_len,
-                         olmoe_act_t *hidden_out)
+void olmoe_embed_forward(const olmoe_model_t * restrict m,
+                         const int * restrict token_ids, size_t seq_len,
+                         olmoe_act_t * restrict hidden_out)
 {
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < seq_len; ++i) {
@@ -22,9 +22,9 @@ void olmoe_embed_forward(const olmoe_model_t *m,
     }
 }
 
-void olmoe_lm_head_forward(const olmoe_model_t *m,
-                           const olmoe_act_t *x, size_t seq_len,
-                           olmoe_act_t *logits_out)
+void olmoe_lm_head_forward(const olmoe_model_t * restrict m,
+                           const olmoe_act_t * restrict x, size_t seq_len,
+                           olmoe_act_t * restrict logits_out)
 {
     cpu_matmul_bf16(logits_out + ((seq_len - 1) * OLMOE_VOCAB), x + ((seq_len - 1) * OLMOE_HIDDEN), m->lm_head, 1, OLMOE_VOCAB, OLMOE_HIDDEN);
 }

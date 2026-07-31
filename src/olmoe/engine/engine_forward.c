@@ -24,8 +24,8 @@ static olmoe_act_t *alloc_act_buffer(size_t n)
     return (olmoe_act_t *)malloc(bytes);
 }
 
-olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len,
-                                   size_t max_cache_len)
+olmoe_status_t olmoe_scratch_init(olmoe_scratch_t * restrict s,
+                                   size_t seq_len, size_t max_cache_len)
 {
     if (!s) {
         return OLMOE_ERR_NULL;
@@ -82,7 +82,7 @@ olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len,
     return OLMOE_OK;
 }
 
-void olmoe_scratch_free(olmoe_scratch_t *s)
+void olmoe_scratch_free(olmoe_scratch_t * restrict s)
 {
     if (!s) {
         return;
@@ -107,7 +107,8 @@ void olmoe_scratch_free(olmoe_scratch_t *s)
 /* Element-wise residual add: out[i] += x[i] for n lanes. Reused by both the
  * attention and MoE block residuals so the integrator names the buffer
  * carrying the live residual stream in exactly one place. */
-static void add_residual(olmoe_act_t *out, const olmoe_act_t *x, size_t n)
+static void add_residual(olmoe_act_t * restrict out,
+                         const olmoe_act_t * restrict x, size_t n)
 {
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < n; ++i) out[i] += x[i];
@@ -119,9 +120,11 @@ static void add_residual(olmoe_act_t *out, const olmoe_act_t *x, size_t n)
  *
  * K/V for the current tokens are stored into the cache *before* the
  * SDPA step so the incremental kernel sees its own position too. */
-static void attention_block(const olmoe_layer_t *L, const olmoe_act_t *x,
+static void attention_block(const olmoe_layer_t * restrict L,
+                            const olmoe_act_t * restrict x,
                             size_t seq, size_t pos, size_t l,
-                            olmoe_scratch_t *s, olmoe_act_t *out)
+                            olmoe_scratch_t * restrict s,
+                            olmoe_act_t * restrict out)
 {
     olmoe_input_ln_forward(L->input_layernorm, x, seq, s->ctx);
     olmoe_q_proj_forward(&L->self_attn, s->ctx, seq, s->q);
@@ -165,9 +168,11 @@ static void attention_block(const olmoe_layer_t *L, const olmoe_act_t *x,
  * down-projection into the MoE accumulator row. The per-token [inter]x3 and
  * [hidden] scratch buffers are owned by moe_block and reused across all
  * (token, expert) pairs of the block to avoid per-call allocation. */
-static void expert_accumulate(const olmoe_expert_t *e, const olmoe_act_t *tok,
-                              olmoe_act_t *acc_row, float w,
-                              float *gate, float *up, float *down, float *act)
+static void expert_accumulate(const olmoe_expert_t * restrict e,
+                              const olmoe_act_t * restrict tok,
+                              olmoe_act_t * restrict acc_row, float w,
+                              float * restrict gate, float * restrict up,
+                              float * restrict down, float * restrict act)
 {
     olmoe_expert_gate_forward(e, tok, 1, gate);
     olmoe_expert_up_forward(e, tok, 1, up);
@@ -182,8 +187,12 @@ static void expert_accumulate(const olmoe_expert_t *e, const olmoe_act_t *tok,
 /* MoE block: post_ln(x) -> mlp_gate -> top-K expert dispatch with SiLU
  * gating and weighted down-projection accumulated into s->expert_out, then
  * residual added into `out`. s->ctx holds the post_ln output (normed2). */
-static void moe_block(const olmoe_layer_t *L, const olmoe_act_t *x,
-                      size_t seq, olmoe_scratch_t *s, olmoe_act_t *out)
+/* NOTE: `x` and `out` are intentionally NOT restrict-qualified — run_layer
+ * passes the same live residual buffer as both (see call site below), so the
+ * two genuinely alias; `restrict` would be a lie. */
+static void moe_block(const olmoe_layer_t * restrict L, const olmoe_act_t *x,
+                      size_t seq, olmoe_scratch_t * restrict s,
+                      olmoe_act_t *out)
 {
     olmoe_post_ln_forward(L->post_attention_layernorm, x, seq, s->ctx);
     olmoe_mlp_gate_forward(L->mlp_gate, s->ctx, seq, s->topk_idx, s->topk_w);
@@ -206,18 +215,21 @@ static void moe_block(const olmoe_layer_t *L, const olmoe_act_t *x,
 /* One transformer layer: attention block (residual into out), then MoE
  * block (residual into the same out). `out` ends the layer holding the
  * live residual stream for the next layer; `x` is this layer's input. */
-static void run_layer(const olmoe_layer_t *L, const olmoe_act_t *x,
+static void run_layer(const olmoe_layer_t * restrict L,
+                      const olmoe_act_t * restrict x,
                       size_t seq, size_t pos, size_t l,
-                      olmoe_scratch_t *s, olmoe_act_t *out)
+                      olmoe_scratch_t * restrict s,
+                      olmoe_act_t * restrict out)
 {
     attention_block(L, x, seq, pos, l, s, out);
     moe_block(L, out, seq, s, out);
 }
 
-olmoe_status_t olmoe_forward(const olmoe_model_t *m, const int *token_ids,
+olmoe_status_t olmoe_forward(const olmoe_model_t * restrict m,
+                             const int * restrict token_ids,
                              size_t seq_len, size_t pos,
-                             olmoe_scratch_t *scratch,
-                             olmoe_act_t *logits_out)
+                             olmoe_scratch_t * restrict scratch,
+                             olmoe_act_t * restrict logits_out)
 {
     if (!m || !token_ids || !scratch || !logits_out) {
         return OLMOE_ERR_NULL;

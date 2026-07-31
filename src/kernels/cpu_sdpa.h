@@ -9,11 +9,13 @@
 /* Scaled dot-product attention for a single head with causal masking.
  * Q/K/V layout: [num_tokens, num_heads, head_dim]; `stride` spans one token.
  * `scores_tmp` is a scratch buffer of length num_tokens. */
-static inline void sdpa_one_head(float *output, const float *query,
-                                 const float *key, const float *value,
+static inline void sdpa_one_head(float * restrict output,
+                                 const float * restrict query,
+                                 const float * restrict key,
+                                 const float * restrict value,
                                  size_t num_tokens, size_t num_heads,
                                  size_t head_dim, float scale,
-                                 float *scores_tmp)
+                                 float * restrict scores_tmp)
 {
     size_t stride = num_heads * head_dim;
     for (size_t i = 0; i < num_tokens; ++i) {
@@ -43,8 +45,10 @@ static inline void sdpa_one_head(float *output, const float *query,
 
 /* Batched SDPA over all heads. Each head allocates its own scores scratch
  * buffer internally. Q/K/V layout: [num_tokens, num_heads, head_dim]. */
-static inline void cpu_sdpa(float *output, const float *query,
-                            const float *key, const float *value,
+static inline void cpu_sdpa(float * restrict output,
+                            const float * restrict query,
+                            const float * restrict key,
+                            const float * restrict value,
                             size_t num_tokens, size_t num_heads,
                             size_t head_dim, float scale)
 {
@@ -65,10 +69,10 @@ static inline void cpu_sdpa(float *output, const float *query,
  * appended the new K/V before calling this function).  Each new token i
  * at absolute position p = cache_position + i attends to cached positions
  * 0 .. p (causal mask). */
-static inline void cpu_sdpa_incremental(float *output,
-    const float *query_new,
-    const float *cache_key,
-    const float *cache_value,
+static inline void cpu_sdpa_incremental(float * restrict output,
+    const float * restrict query_new,
+    const float * restrict cache_key,
+    const float * restrict cache_value,
     size_t new_tokens,
     size_t cache_position,
     size_t num_heads, size_t head_dim,

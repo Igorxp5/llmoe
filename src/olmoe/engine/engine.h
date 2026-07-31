@@ -77,11 +77,11 @@ typedef struct {
  *     ... olmoe_forward(m, ids, 64, 0, &s, s.logits) ...
  *     olmoe_scratch_free(&s);
  */
-olmoe_status_t olmoe_scratch_init(olmoe_scratch_t *s, size_t seq_len,
-                                   size_t max_cache_len);
+olmoe_status_t olmoe_scratch_init(olmoe_scratch_t * restrict s,
+                                   size_t seq_len, size_t max_cache_len);
 
 /* Release every buffer in `s` and zero the struct. NULL-safe. */
-void olmoe_scratch_free(olmoe_scratch_t *s);
+void olmoe_scratch_free(olmoe_scratch_t * restrict s);
 
 /* ── One forward function per tensor kind (olmoe_slot_kind_t) ──────────────
  * Each op reads BF16 weights from a loaded `olmoe_model_t` and reads/writes
@@ -90,78 +90,79 @@ void olmoe_scratch_free(olmoe_scratch_t *s);
  * void. */
 
 /* OLMOE_KIND_EMBED: token-id lookup into embed_tokens->[vocab, hidden]. */
-void olmoe_embed_forward(const olmoe_model_t *m,
-                         const int *token_ids, size_t seq_len,
-                         olmoe_act_t *hidden_out);
+void olmoe_embed_forward(const olmoe_model_t * restrict m,
+                         const int * restrict token_ids, size_t seq_len,
+                         olmoe_act_t * restrict hidden_out);
 
 /* OLMOE_KIND_LM_HEAD: final classifier matmul -> logits[seq, vocab]. */
-void olmoe_lm_head_forward(const olmoe_model_t *m,
-                           const olmoe_act_t *x, size_t seq_len,
-                           olmoe_act_t *logits_out);
+void olmoe_lm_head_forward(const olmoe_model_t * restrict m,
+                           const olmoe_act_t * restrict x, size_t seq_len,
+                           olmoe_act_t * restrict logits_out);
 
 /* OLMOE_KIND_NORM: final RMSNorm before the LM head. */
-void olmoe_final_norm_forward(const olmoe_bf16_t *w,
-                               const olmoe_act_t *x, size_t seq_len,
-                               olmoe_act_t *out);
+void olmoe_final_norm_forward(const olmoe_bf16_t * restrict w,
+                               const olmoe_act_t * restrict x, size_t seq_len,
+                               olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_INPUT_LN: RMSNorm at the start of each layer. */
-void olmoe_input_ln_forward(const olmoe_bf16_t *w,
-                            const olmoe_act_t *x, size_t seq_len,
-                            olmoe_act_t *out);
+void olmoe_input_ln_forward(const olmoe_bf16_t * restrict w,
+                            const olmoe_act_t * restrict x, size_t seq_len,
+                            olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_POST_LN: RMSNorm after attention, before MLP. */
-void olmoe_post_ln_forward(const olmoe_bf16_t *w,
-                           const olmoe_act_t *x, size_t seq_len,
-                           olmoe_act_t *out);
+void olmoe_post_ln_forward(const olmoe_bf16_t * restrict w,
+                           const olmoe_act_t * restrict x, size_t seq_len,
+                           olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_Q_PROJ: x @ q_proj^T -> [seq, hidden]. */
-void olmoe_q_proj_forward(const olmoe_self_attn_t *a,
-                          const olmoe_act_t *x, size_t seq_len,
-                          olmoe_act_t *out);
+void olmoe_q_proj_forward(const olmoe_self_attn_t * restrict a,
+                          const olmoe_act_t * restrict x, size_t seq_len,
+                          olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_K_PROJ: x @ k_proj^T -> [seq, hidden]. */
-void olmoe_k_proj_forward(const olmoe_self_attn_t *a,
-                          const olmoe_act_t *x, size_t seq_len,
-                          olmoe_act_t *out);
+void olmoe_k_proj_forward(const olmoe_self_attn_t * restrict a,
+                          const olmoe_act_t * restrict x, size_t seq_len,
+                          olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_V_PROJ: x @ v_proj^T -> [seq, hidden]. */
-void olmoe_v_proj_forward(const olmoe_self_attn_t *a,
-                          const olmoe_act_t *x, size_t seq_len,
-                          olmoe_act_t *out);
+void olmoe_v_proj_forward(const olmoe_self_attn_t * restrict a,
+                          const olmoe_act_t * restrict x, size_t seq_len,
+                          olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_O_PROJ: attn output @ o_proj^T -> [seq, hidden]. */
-void olmoe_o_proj_forward(const olmoe_self_attn_t *a,
-                          const olmoe_act_t *x, size_t seq_len,
-                          olmoe_act_t *out);
+void olmoe_o_proj_forward(const olmoe_self_attn_t * restrict a,
+                          const olmoe_act_t * restrict x, size_t seq_len,
+                          olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_Q_NORM: RMSNorm over the q vector (applied in-place). */
-void olmoe_q_norm_forward(const olmoe_bf16_t *w,
-                          olmoe_act_t *q, size_t seq_len);
+void olmoe_q_norm_forward(const olmoe_bf16_t * restrict w,
+                          olmoe_act_t * restrict q, size_t seq_len);
 
 /* OLMOE_KIND_K_NORM: RMSNorm over the k vector (applied in-place). */
-void olmoe_k_norm_forward(const olmoe_bf16_t *w,
-                          olmoe_act_t *k, size_t seq_len);
+void olmoe_k_norm_forward(const olmoe_bf16_t * restrict w,
+                          olmoe_act_t * restrict k, size_t seq_len);
 
 /* OLMOE_KIND_MLP_GATE: router logits -> top-K experts per token.
  * Fills topk_idx[seq*K] and topk_w[seq*K]. */
-void olmoe_mlp_gate_forward(const olmoe_bf16_t *w,
-                            const olmoe_act_t *x, size_t seq_len,
-                            int *topk_idx, olmoe_act_t *topk_w);
+void olmoe_mlp_gate_forward(const olmoe_bf16_t * restrict w,
+                            const olmoe_act_t * restrict x, size_t seq_len,
+                            int * restrict topk_idx,
+                            olmoe_act_t * restrict topk_w);
 
 /* OLMOE_KIND_EXPERT_GATE: x @ expert.gate_proj^T -> [n_tokens, inter]. */
-void olmoe_expert_gate_forward(const olmoe_expert_t *e,
-                               const olmoe_act_t *x, size_t n_tokens,
-                               olmoe_act_t *out);
+void olmoe_expert_gate_forward(const olmoe_expert_t * restrict e,
+                               const olmoe_act_t * restrict x, size_t n_tokens,
+                               olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_EXPERT_UP: x @ expert.up_proj^T -> [n_tokens, inter]. */
-void olmoe_expert_up_forward(const olmoe_expert_t *e,
-                             const olmoe_act_t *x, size_t n_tokens,
-                             olmoe_act_t *out);
+void olmoe_expert_up_forward(const olmoe_expert_t * restrict e,
+                              const olmoe_act_t * restrict x, size_t n_tokens,
+                              olmoe_act_t * restrict out);
 
 /* OLMOE_KIND_EXPERT_DOWN: x @ expert.down_proj^T -> [n_tokens, hidden]. */
-void olmoe_expert_down_forward(const olmoe_expert_t *e,
-                               const olmoe_act_t *x, size_t n_tokens,
-                               olmoe_act_t *out);
+void olmoe_expert_down_forward(const olmoe_expert_t * restrict e,
+                               const olmoe_act_t * restrict x, size_t n_tokens,
+                               olmoe_act_t * restrict out);
 
 /* Top-level orchestrator. Wires the per-kind ops above in the OLMoE forward
  * order using `scratch` for intermediate storage. `pos` is the absolute
@@ -181,9 +182,10 @@ void olmoe_expert_down_forward(const olmoe_expert_t *e,
  *     olmoe_forward(m, &next, 1, pos, &s, s.logits);
  *     olmoe_scratch_free(&s);
  */
-olmoe_status_t olmoe_forward(const olmoe_model_t *m, const int *token_ids,
+olmoe_status_t olmoe_forward(const olmoe_model_t * restrict m,
+                             const int * restrict token_ids,
                              size_t seq_len, size_t pos,
-                             olmoe_scratch_t *scratch,
-                             olmoe_act_t *logits_out);
+                             olmoe_scratch_t * restrict scratch,
+                             olmoe_act_t * restrict logits_out);
 
 #endif /* OLMOE_ENGINE_H */
