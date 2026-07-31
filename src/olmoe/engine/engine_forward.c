@@ -8,6 +8,7 @@
 
 #include "olmoe/engine/engine.h"
 #include "olmoe/engine/engine_internal.h"
+#include "kernels/kernels.h"
 #include "kernels/cpu_rope.h"
 #include "kernels/cpu_sdpa.h"
 #include "kernels/cpu_silu.h"
@@ -176,12 +177,16 @@ static void expert_accumulate(const olmoe_expert_t * restrict e,
 {
     olmoe_expert_gate_forward(e, tok, 1, gate);
     olmoe_expert_up_forward(e, tok, 1, up);
-    #pragma omp simd
+    #pragma omp parallel for simd schedule(static)
     for (size_t j = 0; j < (size_t)OLMOE_INTER; ++j)
         act[j] = cpu_silu(gate[j]) * up[j];
     olmoe_expert_down_forward(e, act, 1, down);
-    for (size_t h = 0; h < (size_t)OLMOE_HIDDEN; ++h)
-        acc_row[h] += w * down[h];
+    const __m512 vw = _mm512_set1_ps(w);
+    #pragma omp parallel for simd schedule(static)
+    for (size_t h = 0; h < (size_t)OLMOE_HIDDEN; h += 16)
+        _mm512_storeu_ps(acc_row + h,
+                         _mm512_fmadd_ps(vw, _mm512_loadu_ps(down + h),
+                                         _mm512_loadu_ps(acc_row + h)));
 }
 
 /* MoE block: post_ln(x) -> mlp_gate -> top-K expert dispatch with SiLU
