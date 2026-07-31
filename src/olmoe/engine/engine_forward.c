@@ -148,7 +148,7 @@ static void attention_block(const olmoe_layer_t * restrict L,
     }
 
     float scale = 1.0f / sqrtf((float)OLMOE_HEAD_DIM);
-    if (s->cache_len > 0) {
+    if (__builtin_expect(s->cache_len > 0, 1)) {
         /* Incremental decode: compute attention only for the new tokens. */
         size_t layer_offset = l * s->max_cache_len * (size_t)OLMOE_HIDDEN;
         cpu_sdpa_incremental(s->ctx, s->q,

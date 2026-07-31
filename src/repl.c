@@ -106,9 +106,9 @@ static void stream_decoded_tokens(const olmoe_token_id_t *tokens,
                                   size_t *dec_len)
 {
     size_t new_len = olmoe_decode(tokens + n_tok, n_output, NULL, 0);
-    if (new_len <= *dec_len) return;
+    if (__builtin_expect(new_len <= *dec_len, 0)) return;
     char *dec = malloc(new_len + 1);
-    if (!dec) return;
+    if (__builtin_expect(!dec, 0)) return;
     olmoe_decode(tokens + n_tok, n_output, dec, new_len + 1);
     fwrite(dec + *dec_len, 1, new_len - *dec_len, stdout);
     fflush(stdout);
@@ -123,14 +123,14 @@ static void decode_until_eos(olmoe_model_t *m, olmoe_scratch_t *s,
     for (size_t pos = n_tok; pos + 1 < MAX_SEQ_LEN; ++pos) {
         if (stop_flag || *output_tokens == 0) return;
 
-        if (olmoe_forward(m, (int *)&tokens[pos], 1, pos, s, s->logits)
-            != OLMOE_OK) {
+        if (__builtin_expect(olmoe_forward(m, (int *)&tokens[pos], 1, pos, s,
+                                           s->logits) != OLMOE_OK, 0)) {
             fprintf(stderr, "forward failed at pos %zu\n", pos);
             return;
         }
 
         int next = sample_argmax(s->logits, OLMOE_VOCAB);
-        if (next == EOS_TOKEN_ID) return;
+        if (__builtin_expect(next == EOS_TOKEN_ID, 0)) return;
         tokens[pos + 1] = (olmoe_token_id_t)next;
         (*output_tokens)++;
         stream_decoded_tokens(tokens, n_tok, *output_tokens, dec_len);
