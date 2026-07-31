@@ -8,7 +8,7 @@
 /* Apply Rotary Position Embedding to one head vector `x_head` of dimension
  * `head_dim` at absolute position `position`. `theta` is the base frequency
  * (typically 10000.0). Modifies x_head in-place. */
-static inline void apply_rope_head(float * restrict x_head, size_t head_dim,
+static inline __attribute__((always_inline)) void apply_rope_head(float * restrict x_head, size_t head_dim,
                                    float position, float theta)
 {
     size_t h = head_dim / 2;
@@ -25,7 +25,7 @@ static inline void apply_rope_head(float * restrict x_head, size_t head_dim,
 /* Batched RoPE: apply rotary embeddings to all heads in `x_tensor`.
  * Layout: [num_tokens, num_heads, head_dim]. `position_offset` is the
  * absolute position of the first token (used for incremental decoding). */
-static inline void cpu_rope(float * restrict x_tensor, size_t num_tokens,
+static inline __attribute__((always_inline)) void cpu_rope(float * restrict x_tensor, size_t num_tokens,
                             size_t position_offset, size_t num_heads,
                             size_t head_dim, float theta)
 {

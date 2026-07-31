@@ -6,7 +6,7 @@
 #include "kernels/kernels.h"
 
 /* SiLU (Swish) activation: x * sigmoid(x) = x / (1 + exp(-x)) */
-static inline float cpu_silu(float x)
+static inline __attribute__((always_inline)) float cpu_silu(float x)
 {
     return x / (1.0f + expf(-x));
 }

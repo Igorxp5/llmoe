@@ -7,7 +7,7 @@
 
 /* Compute 1 / sqrt(mean(input_row^2) + epsilon) for an RMSNorm row.
  * `input_row` has length `dim`. The loop strides by 16 (AVX-512 register width). */
-static inline float cpu_rmsnorm_scale(const float * restrict input_row,
+static inline __attribute__((always_inline)) float cpu_rmsnorm_scale(const float * restrict input_row,
                                        size_t dim, float epsilon)
 {
     __m512 acc = _mm512_setzero_ps();
@@ -20,7 +20,7 @@ static inline float cpu_rmsnorm_scale(const float * restrict input_row,
 }
 
 /* Apply the pre-computed RMSNorm scale factor: output = input * scale * weight */
-static inline void cpu_rmsnorm_apply(float *output,
+static inline __attribute__((always_inline)) void cpu_rmsnorm_apply(float *output,
                                       const float *input,
                                       float scale_factor,
                                       const uint16_t * restrict weight,
@@ -36,7 +36,7 @@ static inline void cpu_rmsnorm_apply(float *output,
 }
 
 /* Full RMSNorm on one row: output = input / sqrt(mean(input^2) + epsilon) * weight */
-static inline void cpu_rmsnorm_row(float *output, const float *input,
+static inline __attribute__((always_inline)) void cpu_rmsnorm_row(float *output, const float *input,
                                     const uint16_t * restrict weight,
                                     size_t dim, float epsilon)
 {
@@ -46,7 +46,7 @@ static inline void cpu_rmsnorm_row(float *output, const float *input,
 
 /* Batched RMSNorm over `num_rows` vectors of length `dim`.
  * Each row i: output[i] = input[i] / sqrt(mean(input[i]^2) + epsilon) * weight */
-static inline void cpu_rmsnorm(float *output, const float *input,
+static inline __attribute__((always_inline)) void cpu_rmsnorm(float *output, const float *input,
                                 const uint16_t * restrict weight,
                                 size_t num_rows, size_t dim, float epsilon)
 {

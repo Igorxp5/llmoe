@@ -9,7 +9,7 @@
 /* Scaled dot-product attention for a single head with causal masking.
  * Q/K/V layout: [num_tokens, num_heads, head_dim]; `stride` spans one token.
  * `scores_tmp` is a scratch buffer of length num_tokens. */
-static inline void sdpa_one_head(float * restrict output,
+static inline __attribute__((always_inline)) void sdpa_one_head(float * restrict output,
                                  const float * restrict query,
                                  const float * restrict key,
                                  const float * restrict value,
@@ -45,7 +45,7 @@ static inline void sdpa_one_head(float * restrict output,
 
 /* Batched SDPA over all heads. Each head allocates its own scores scratch
  * buffer internally. Q/K/V layout: [num_tokens, num_heads, head_dim]. */
-static inline void cpu_sdpa(float * restrict output,
+static inline __attribute__((always_inline)) void cpu_sdpa(float * restrict output,
                             const float * restrict query,
                             const float * restrict key,
                             const float * restrict value,
@@ -69,7 +69,7 @@ static inline void cpu_sdpa(float * restrict output,
  * appended the new K/V before calling this function).  Each new token i
  * at absolute position p = cache_position + i attends to cached positions
  * 0 .. p (causal mask). */
-static inline void cpu_sdpa_incremental(float * restrict output,
+static inline __attribute__((always_inline)) void cpu_sdpa_incremental(float * restrict output,
     const float * restrict query_new,
     const float * restrict cache_key,
     const float * restrict cache_value,

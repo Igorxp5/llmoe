@@ -10,12 +10,13 @@
  * helper for softmax). Uses a tree-structured reduce: 16-wide AVX-512
  * chunks are reduced to scalars, then those scalars are reduced
  * iteratively until one value remains. */
-static inline float cpu_softmax_row_max(const float * restrict input,
+static inline __attribute__((always_inline)) float cpu_softmax_row_max(const float * restrict input,
                                         size_t dim)
 {
     const float *cur_input = input;
     size_t cur_dim = dim;
     float maxes[dim / 16 + 1];
+    maxes[0] = 0; // avoid "warning: ‘*maxes[0]’ may be used uninitialized"
 
     do {
         size_t nmax = 0;
@@ -38,7 +39,7 @@ static inline float cpu_softmax_row_max(const float * restrict input,
 
 /* Stable softmax: output[i] = exp(input[i] - max) / sum(exp(input - max)).
  * Both vectors have length `dim`. */
-static inline void cpu_softmax_row_norm(float * restrict output, size_t dim,
+static inline __attribute__((always_inline)) void cpu_softmax_row_norm(float * restrict output, size_t dim,
                                         float sum)
 {
     __m512 vsum = _mm512_set1_ps(sum);
@@ -51,7 +52,7 @@ static inline void cpu_softmax_row_norm(float * restrict output, size_t dim,
         output[r] /= sum;
 }
 
-static inline void cpu_softmax(float * restrict output,
+static inline __attribute__((always_inline)) void cpu_softmax(float * restrict output,
                               const float * restrict input, size_t dim)
 {
     float mx = cpu_softmax_row_max(input, dim);

@@ -8,7 +8,7 @@
 
 /* Find the highest-scoring unused index. `used_mask[r] == true` means
  * index r has already been selected. Returns n if all are used. */
-static inline size_t cpu_topk_pick_next(const float * restrict scores,
+static inline __attribute__((always_inline)) size_t cpu_topk_pick_next(const float * restrict scores,
                                         size_t num_scores,
                                         const bool * restrict used_mask)
 {
@@ -28,7 +28,7 @@ static inline size_t cpu_topk_pick_next(const float * restrict scores,
  * (length `num_scores`). Writes indices to `indices_out` and values to
  * `values_out`, both of length `top_k`. num_scores must be <= 64 (stack
  * allocation for the used-bitmask). */
-static inline void cpu_topk_desc(const float * restrict scores,
+static inline __attribute__((always_inline)) void cpu_topk_desc(const float * restrict scores,
                                  size_t num_scores, size_t top_k,
                                  int * restrict indices_out,
                                  float * restrict values_out)
