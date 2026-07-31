@@ -202,7 +202,7 @@ static void moe_block(const olmoe_layer_t * restrict L, const olmoe_act_t *x,
     olmoe_post_ln_forward(L->post_attention_layernorm, x, seq, s->ctx);
     olmoe_mlp_gate_forward(L->mlp_gate, s->ctx, seq, s->topk_idx, s->topk_w);
     memset(s->expert_out, 0, seq * (size_t)OLMOE_HIDDEN * sizeof(olmoe_act_t));
-    #pragma omp parallel for simd schedule(static) collapse(2)
+    #pragma omp parallel for schedule(static) collapse(2)
     for (size_t i = 0; i < seq; ++i) {
         float gate[OLMOE_INTER], up[OLMOE_INTER], act[OLMOE_INTER];
         float down[OLMOE_HIDDEN];
