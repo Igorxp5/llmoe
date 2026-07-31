@@ -62,14 +62,11 @@ redundant with the compile-time constants). BF16 storage is a bare
 
 ## Lifetime and ownership
 
-All weight buffers are `malloc`'d by the loader and stored in a flat
-ownership table `m->bufs[0..n_bufs)`. The struct-field pointers (e.g.
-`m->layers[3].self_attn.q_proj`) are aliases into the same allocation; they
-must not be freed individually. `olmoe_model_free` walks `bufs` and frees
-each entry, then the table, then the `layers` array, then the struct. It
-is NULL-safe and also safe on a partially-loaded model (used by the loader
-on the error path): uneaten slots in `bufs` are still `calloc`-zeroed, so
-`free(NULL)` is a no-op.
+The model is a single `calloc`'d block (~12.9 GiB, zero-initialized).
+Every weight field is a compile-time-sized array inside that block; the
+loader `fread`s shard bytes directly into the right field offset. There
+are no individual `malloc`s or per-tensor ownership tables.
+`olmoe_model_free(model)` does a single `free(model)` (NULL-safe).
 
 ## Loading flow
 
@@ -77,11 +74,10 @@ Per shard (`src/olmoe/layers/layers.c`):
 
   1. open `dir + "/" + OLMOE_SHARD_FILE_NAMES[shard_idx]`
   2. read the 8-byte LE header-length, `fseek` past the JSON header
-  3. walk `OLMOE_SHARD_LAYOUT[shard_idx]`, `fread(bytes_for_kind(kind))`
-     into a fresh `malloc`'d `uint16_t` buffer for each tensor
-  4. `place_tensor` records the buffer in `m->bufs[slot]` and routes it
-     to the right struct field by `kind`/`layer`/`expert`
-  5. assert EOF after the last tensor (no trailing bytes -> layout matches)
+  3. walk `OLMOE_SHARD_LAYOUT[shard_idx]`, compute the target field's
+     array address via `target_field(m, d)`, and `fread(bytes_for_kind(kind))`
+     directly into it — no per-tensor `malloc`
+  4. assert EOF after the last tensor (no trailing bytes -> layout matches)
 
 ## Oracle source of truth
 
@@ -98,15 +94,15 @@ hand-verified against the inspect dump (e.g. `0x400f` == 2.234375 for
 `tests/test_layer.c` (compiled into the unified `tests/test_main.c`
 runner) loads the model once and runs these checks:
 
-  - `test_dims_match_config`
-  - `test_top_level_tensors_nonnull`
-  - `test_every_layer_self_attn_nonnull`
-  - `test_every_layer_layernorms_nonnull`
-  - `test_every_layer_mlp_gate_nonnull`
-  - `test_every_expert_tensor_nonnull`
+  - `test_top_level_tensors_nonzero`
+  - `test_every_layer_self_attn_nonzero`
+  - `test_every_layer_layernorms_nonzero`
+  - `test_every_layer_mlp_gate_nonzero`
+  - `test_every_expert_tensor_nonzero`
   - `test_norm_first_values_match_oracle`
   - `test_lm_head_first_values_match_oracle`
   - `test_expert_zero_down_values_match_oracle`
+  - `test_embed_lookup_matches_oracle`
 
 The model dir defaults to `models/OLMoE-1B-7B-0924-Instruct` and is
 overridable via the `OLMOE_TEST_MODEL_DIR` environment variable.

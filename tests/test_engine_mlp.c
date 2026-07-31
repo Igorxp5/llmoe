@@ -147,23 +147,26 @@ static int test_expert_gate_matches_scalar(void)
 {
     enum { TOK = 2 };
     size_t inter = (size_t)OLMOE_INTER, hidden = (size_t)OLMOE_HIDDEN;
+    static olmoe_expert_t expert;
 
-    olmoe_expert_t expert;
-    memset(&expert, 0, sizeof expert);
-    expert.gate_proj = malloc(inter * hidden * sizeof *expert.gate_proj);
+    size_t sz = inter * hidden * sizeof(olmoe_bf16_t);
+    olmoe_bf16_t *w = malloc(sz);
     olmoe_act_t *x = malloc(TOK * hidden * sizeof *x);
     olmoe_act_t *out = malloc(TOK * inter * sizeof *out);
     olmoe_act_t *scalar_out = malloc(TOK * inter * sizeof *scalar_out);
-    if (!expert.gate_proj || !x || !out || !scalar_out) {
+    if (!w || !x || !out || !scalar_out) {
         printf("FAIL: expert_gate malloc OOM\n");
-        free(expert.gate_proj); free(x); free(out); free(scalar_out);
+        free(w); free(x); free(out); free(scalar_out);
         return 1;
     }
 
     for (size_t j = 0; j < inter; ++j)
         for (size_t l = 0; l < hidden; ++l)
-            expert.gate_proj[j * hidden + l] =
+            w[j * hidden + l] =
                 f32_to_bf16((float)(((int)((j * hidden + l) % 13)) - 6) * 0.0625f);
+    memcpy(expert.gate_proj, w, sz);
+    free(w);
+
     for (size_t i = 0; i < TOK; ++i)
         for (size_t l = 0; l < hidden; ++l)
             x[i * hidden + l] =
@@ -173,7 +176,7 @@ static int test_expert_gate_matches_scalar(void)
     scalar_matmul_bf16(scalar_out, x, expert.gate_proj, TOK, inter, hidden);
 
     int failed = lanes_match(out, scalar_out, TOK * inter);
-    free(expert.gate_proj); free(x); free(out); free(scalar_out);
+    free(x); free(out); free(scalar_out);
     if (!failed) printf("PASS: expert_gate matmul matches scalar\n");
     else         printf("FAIL: expert_gate matmul matches scalar\n");
     return failed;
@@ -187,23 +190,26 @@ static int test_expert_up_matches_scalar(void)
 {
     enum { TOK = 2 };
     size_t inter = (size_t)OLMOE_INTER, hidden = (size_t)OLMOE_HIDDEN;
+    static olmoe_expert_t expert;
 
-    olmoe_expert_t expert;
-    memset(&expert, 0, sizeof expert);
-    expert.up_proj = malloc(inter * hidden * sizeof *expert.up_proj);
+    size_t sz = inter * hidden * sizeof(olmoe_bf16_t);
+    olmoe_bf16_t *w = malloc(sz);
     olmoe_act_t *x = malloc(TOK * hidden * sizeof *x);
     olmoe_act_t *out = malloc(TOK * inter * sizeof *out);
     olmoe_act_t *scalar_out = malloc(TOK * inter * sizeof *scalar_out);
-    if (!expert.up_proj || !x || !out || !scalar_out) {
+    if (!w || !x || !out || !scalar_out) {
         printf("FAIL: expert_up malloc OOM\n");
-        free(expert.up_proj); free(x); free(out); free(scalar_out);
+        free(w); free(x); free(out); free(scalar_out);
         return 1;
     }
 
     for (size_t j = 0; j < inter; ++j)
         for (size_t l = 0; l < hidden; ++l)
-            expert.up_proj[j * hidden + l] =
+            w[j * hidden + l] =
                 f32_to_bf16((float)(((int)((j * hidden + l) % 11)) - 5) * 0.125f);
+    memcpy(expert.up_proj, w, sz);
+    free(w);
+
     for (size_t i = 0; i < TOK; ++i)
         for (size_t l = 0; l < hidden; ++l)
             x[i * hidden + l] =
@@ -213,7 +219,7 @@ static int test_expert_up_matches_scalar(void)
     scalar_matmul_bf16(scalar_out, x, expert.up_proj, TOK, inter, hidden);
 
     int failed = lanes_match(out, scalar_out, TOK * inter);
-    free(expert.up_proj); free(x); free(out); free(scalar_out);
+    free(x); free(out); free(scalar_out);
     if (!failed) printf("PASS: expert_up matmul matches scalar\n");
     else         printf("FAIL: expert_up matmul matches scalar\n");
     return failed;
@@ -227,23 +233,26 @@ static int test_expert_down_matches_scalar(void)
 {
     enum { TOK = 2 };
     size_t inter = (size_t)OLMOE_INTER, hidden = (size_t)OLMOE_HIDDEN;
+    static olmoe_expert_t expert;
 
-    olmoe_expert_t expert;
-    memset(&expert, 0, sizeof expert);
-    expert.down_proj = malloc(hidden * inter * sizeof *expert.down_proj);
+    size_t sz = hidden * inter * sizeof(olmoe_bf16_t);
+    olmoe_bf16_t *w = malloc(sz);
     olmoe_act_t *x = malloc(TOK * inter * sizeof *x);
     olmoe_act_t *out = malloc(TOK * hidden * sizeof *out);
     olmoe_act_t *scalar_out = malloc(TOK * hidden * sizeof *scalar_out);
-    if (!expert.down_proj || !x || !out || !scalar_out) {
+    if (!w || !x || !out || !scalar_out) {
         printf("FAIL: expert_down malloc OOM\n");
-        free(expert.down_proj); free(x); free(out); free(scalar_out);
+        free(w); free(x); free(out); free(scalar_out);
         return 1;
     }
 
     for (size_t j = 0; j < hidden; ++j)
         for (size_t l = 0; l < inter; ++l)
-            expert.down_proj[j * inter + l] =
+            w[j * inter + l] =
                 f32_to_bf16((float)(((int)((j * inter + l) % 7)) - 3) * 0.25f);
+    memcpy(expert.down_proj, w, sz);
+    free(w);
+
     for (size_t i = 0; i < TOK; ++i)
         for (size_t l = 0; l < inter; ++l)
             x[i * inter + l] =
@@ -253,7 +262,7 @@ static int test_expert_down_matches_scalar(void)
     scalar_matmul_bf16(scalar_out, x, expert.down_proj, TOK, hidden, inter);
 
     int failed = lanes_match(out, scalar_out, TOK * hidden);
-    free(expert.down_proj); free(x); free(out); free(scalar_out);
+    free(x); free(out); free(scalar_out);
     if (!failed) printf("PASS: expert_down matmul matches scalar\n");
     else         printf("FAIL: expert_down matmul matches scalar\n");
     return failed;

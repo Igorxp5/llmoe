@@ -13,114 +13,97 @@
 
 /* ---------- checks ------------------------------------------------------ */
 
-/* Tests assert the baked dimension constants agree with what the loader
- * actually built. A mismatch would mean layout.inc drifted from the
- * expected config: catch it here instead of silently reading past buffers. */
-static int test_dims_match_config(const olmoe_model_t *m)
+/* Verify the loader actually wrote data into each weight buffer by sampling
+ * the first BF16 element. With the model now being a single calloc'd block,
+ * zero-initialized at load time, a zero byte at index 0 means the loader
+ * never reached that field (layout mismatch, truncated shard, etc.). */
+static int test_top_level_tensors_nonzero(const olmoe_model_t *m)
 {
     int failed = 0;
-    if (m->n_layers != OLMOE_N_LAYERS) {
-        printf("FAIL: n_layers expected %d got %zu\n", OLMOE_N_LAYERS, m->n_layers);
-        ++failed;
-    }
-    if (m->n_bufs != OLMOE_N_TOTAL_TENSORS) {
-        printf("FAIL: n_bufs expected %d got %zu\n",
-               OLMOE_N_TOTAL_TENSORS, m->n_bufs);
-        ++failed;
-    }
+    if (m->embed_tokens[0] == 0) { printf("FAIL: embed_tokens zero\n"); ++failed; }
+    if (m->lm_head[0] == 0)       { printf("FAIL: lm_head zero\n");       ++failed; }
+    if (m->norm[0] == 0)          { printf("FAIL: norm zero\n");          ++failed; }
     if (!failed)
-        printf("PASS: dims (layers=%d, total_tensors=%d)\n",
-               OLMOE_N_LAYERS, OLMOE_N_TOTAL_TENSORS);
+        printf("PASS: top-level tensors written by loader\n");
     return failed;
 }
 
-static int test_top_level_tensors_nonnull(const olmoe_model_t *m)
-{
-    int failed = 0;
-    if (!m->embed_tokens) { printf("FAIL: embed_tokens NULL\n"); ++failed; }
-    if (!m->lm_head)       { printf("FAIL: lm_head NULL\n");       ++failed; }
-    if (!m->norm)          { printf("FAIL: norm NULL\n");          ++failed; }
-    if (!failed)
-        printf("PASS: top-level tensors allocated\n");
-    return failed;
-}
-
-static int test_self_attn_nonnull_for_layer(const olmoe_model_t *m, int L)
+static int test_self_attn_nonzero_for_layer(const olmoe_model_t *m, int L)
 {
     const olmoe_self_attn_t *sa = &m->layers[L].self_attn;
     int failed = 0;
-    if (!sa->q_proj) { printf("FAIL: layer %d q_proj NULL\n", L); ++failed; }
-    if (!sa->k_proj) { printf("FAIL: layer %d k_proj NULL\n", L); ++failed; }
-    if (!sa->v_proj) { printf("FAIL: layer %d v_proj NULL\n", L); ++failed; }
-    if (!sa->o_proj) { printf("FAIL: layer %d o_proj NULL\n", L); ++failed; }
-    if (!sa->q_norm) { printf("FAIL: layer %d q_norm NULL\n", L); ++failed; }
-    if (!sa->k_norm) { printf("FAIL: layer %d k_norm NULL\n", L); ++failed; }
+    if (sa->q_proj[0] == 0) { printf("FAIL: layer %d q_proj zero\n", L); ++failed; }
+    if (sa->k_proj[0] == 0) { printf("FAIL: layer %d k_proj zero\n", L); ++failed; }
+    if (sa->v_proj[0] == 0) { printf("FAIL: layer %d v_proj zero\n", L); ++failed; }
+    if (sa->o_proj[0] == 0) { printf("FAIL: layer %d o_proj zero\n", L); ++failed; }
+    if (sa->q_norm[0] == 0) { printf("FAIL: layer %d q_norm zero\n", L); ++failed; }
+    if (sa->k_norm[0] == 0) { printf("FAIL: layer %d k_norm zero\n", L); ++failed; }
     return failed;
 }
 
-static int test_every_layer_self_attn_nonnull(const olmoe_model_t *m)
+static int test_every_layer_self_attn_nonzero(const olmoe_model_t *m)
 {
     int failed = 0;
     for (int L = 0; L < OLMOE_N_LAYERS; ++L)
-        failed += test_self_attn_nonnull_for_layer(m, L);
+        failed += test_self_attn_nonzero_for_layer(m, L);
     if (!failed)
-        printf("PASS: all %d layers' self_attn tensors allocated\n",
+        printf("PASS: all %d layers' self_attn tensors written by loader\n",
                OLMOE_N_LAYERS);
     return failed;
 }
 
-static int test_every_layer_layernorms_nonnull(const olmoe_model_t *m)
+static int test_every_layer_layernorms_nonzero(const olmoe_model_t *m)
 {
     int failed = 0;
     for (int L = 0; L < OLMOE_N_LAYERS; ++L) {
-        if (!m->layers[L].input_layernorm) {
-            printf("FAIL: layer %d input_layernorm NULL\n", L); ++failed;
+        if (m->layers[L].input_layernorm[0] == 0) {
+            printf("FAIL: layer %d input_layernorm zero\n", L); ++failed;
         }
-        if (!m->layers[L].post_attention_layernorm) {
-            printf("FAIL: layer %d post_attention_layernorm NULL\n", L); ++failed;
+        if (m->layers[L].post_attention_layernorm[0] == 0) {
+            printf("FAIL: layer %d post_attention_layernorm zero\n", L); ++failed;
         }
     }
     if (!failed)
-        printf("PASS: all %d layers' layernorms allocated\n",
+        printf("PASS: all %d layers' layernorms written by loader\n",
                OLMOE_N_LAYERS);
     return failed;
 }
 
-static int test_every_layer_mlp_gate_nonnull(const olmoe_model_t *m)
+static int test_every_layer_mlp_gate_nonzero(const olmoe_model_t *m)
 {
     int failed = 0;
     for (int L = 0; L < OLMOE_N_LAYERS; ++L) {
-        if (!m->layers[L].mlp_gate) {
-            printf("FAIL: layer %d mlp_gate (router) NULL\n", L); ++failed;
+        if (m->layers[L].mlp_gate[0] == 0) {
+            printf("FAIL: layer %d mlp_gate (router) zero\n", L); ++failed;
         }
     }
     if (!failed)
-        printf("PASS: all %d layers' mlp_gate (router) allocated\n",
+        printf("PASS: all %d layers' mlp_gate (router) written by loader\n",
                OLMOE_N_LAYERS);
     return failed;
 }
 
 /* 16 layers * 64 experts * 3 weights = 3072 expert buffers. Report only
  * failures so a green run stays a single line. */
-static int test_every_expert_tensor_nonnull(const olmoe_model_t *m)
+static int test_every_expert_tensor_nonzero(const olmoe_model_t *m)
 {
     int failed = 0;
     for (int L = 0; L < OLMOE_N_LAYERS; ++L) {
         for (int E = 0; E < OLMOE_N_EXPERTS; ++E) {
             const olmoe_expert_t *ex = &m->layers[L].experts[E];
-            if (!ex->gate_proj) {
-                printf("FAIL: layer %d expert %d gate_proj NULL\n", L, E); ++failed;
+            if (ex->gate_proj[0] == 0) {
+                printf("FAIL: layer %d expert %d gate_proj zero\n", L, E); ++failed;
             }
-            if (!ex->up_proj) {
-                printf("FAIL: layer %d expert %d up_proj NULL\n", L, E); ++failed;
+            if (ex->up_proj[0] == 0) {
+                printf("FAIL: layer %d expert %d up_proj zero\n", L, E); ++failed;
             }
-            if (!ex->down_proj) {
-                printf("FAIL: layer %d expert %d down_proj NULL\n", L, E); ++failed;
+            if (ex->down_proj[0] == 0) {
+                printf("FAIL: layer %d expert %d down_proj zero\n", L, E); ++failed;
             }
         }
     }
     if (!failed)
-        printf("PASS: all %d layers x %d experts x 3 weights allocated\n",
+        printf("PASS: all %d layers x %d experts x 3 weights written by loader\n",
                OLMOE_N_LAYERS, OLMOE_N_EXPERTS);
     return failed;
 }
@@ -219,12 +202,11 @@ int test_layer_loads_and_validates(void)
     }
 
     int failed = 0;
-    failed += test_dims_match_config(m);
-    failed += test_top_level_tensors_nonnull(m);
-    failed += test_every_layer_self_attn_nonnull(m);
-    failed += test_every_layer_layernorms_nonnull(m);
-    failed += test_every_layer_mlp_gate_nonnull(m);
-    failed += test_every_expert_tensor_nonnull(m);
+    failed += test_top_level_tensors_nonzero(m);
+    failed += test_every_layer_self_attn_nonzero(m);
+    failed += test_every_layer_layernorms_nonzero(m);
+    failed += test_every_layer_mlp_gate_nonzero(m);
+    failed += test_every_expert_tensor_nonzero(m);
     failed += test_norm_first_values_match_oracle(m);
     failed += test_lm_head_first_values_match_oracle(m);
     failed += test_expert_zero_down_values_match_oracle(m);

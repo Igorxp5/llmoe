@@ -113,10 +113,8 @@ Wires the per-kind ops in OLMoE forward order using `scratch` for
 intermediate storage: `embed -> [per layer: input_ln, q/k/v_proj,
 q/k_norm, RoPE q/k, causal SDPA, o_proj, residual, post_ln, mlp_gate, MoE
 top-K expert dispatch with SiLU gating and weighted down-projection,
-residual] -> final_norm -> lm_head -> logits`. The per-layer loop runs
-`m->n_layers` iterations (not the baked `OLMOE_N_LAYERS`) so synthetic
-low-RAM end-to-end validation can set `n_layers` smaller than the real
-topology. `logits_out` is caller-owned (commonly `scratch->logits`).
+residual] -> final_norm -> lm_head -> logits`. The per-layer loop is
+driven by the baked `OLMOE_N_LAYERS` constant.
 
 ## Topology constants
 

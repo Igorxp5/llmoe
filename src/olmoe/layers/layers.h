@@ -13,55 +13,50 @@ typedef uint16_t olmoe_bf16_t;
 #include "olmoe/layers/model_layout.inc"
 
 typedef struct {
-    olmoe_bf16_t *gate_proj;     /* [inter, hidden]   */
-    olmoe_bf16_t *up_proj;      /* [inter, hidden]   */
-    olmoe_bf16_t *down_proj;    /* [hidden, inter]   */
+    olmoe_bf16_t gate_proj[OLMOE_INTER * OLMOE_HIDDEN]; /* [inter, hidden]   */
+    olmoe_bf16_t up_proj[OLMOE_INTER * OLMOE_HIDDEN];   /* [inter, hidden]   */
+    olmoe_bf16_t down_proj[OLMOE_HIDDEN * OLMOE_INTER]; /* [hidden, inter]   */
 } olmoe_expert_t;
 
 typedef struct {
-    olmoe_bf16_t *q_proj;       /* [hidden, hidden]  */
-    olmoe_bf16_t *k_proj;       /* [hidden, hidden]  */
-    olmoe_bf16_t *v_proj;       /* [hidden, hidden]  */
-    olmoe_bf16_t *o_proj;       /* [hidden, hidden]  */
-    olmoe_bf16_t *q_norm;       /* [hidden]          */
-    olmoe_bf16_t *k_norm;       /* [hidden]          */
+    olmoe_bf16_t q_proj[OLMOE_HIDDEN * OLMOE_HIDDEN];   /* [hidden, hidden]  */
+    olmoe_bf16_t k_proj[OLMOE_HIDDEN * OLMOE_HIDDEN];   /* [hidden, hidden]  */
+    olmoe_bf16_t v_proj[OLMOE_HIDDEN * OLMOE_HIDDEN];   /* [hidden, hidden]  */
+    olmoe_bf16_t o_proj[OLMOE_HIDDEN * OLMOE_HIDDEN];   /* [hidden, hidden]  */
+    olmoe_bf16_t q_norm[OLMOE_HIDDEN];                  /* [hidden]          */
+    olmoe_bf16_t k_norm[OLMOE_HIDDEN];                  /* [hidden]          */
 } olmoe_self_attn_t;
 
 typedef struct {
     olmoe_self_attn_t self_attn;
-    olmoe_bf16_t *input_layernorm;        /* [hidden]          */
-    olmoe_bf16_t *post_attention_layernorm; /* [hidden]          */
-    olmoe_bf16_t *mlp_gate;               /* [n_experts,hidden] (router) */
+    olmoe_bf16_t input_layernorm[OLMOE_HIDDEN];          /* [hidden]          */
+    olmoe_bf16_t post_attention_layernorm[OLMOE_HIDDEN]; /* [hidden]          */
+    olmoe_bf16_t mlp_gate[OLMOE_N_EXPERTS * OLMOE_HIDDEN]; /* [n_experts,hidden] (router) */
     olmoe_expert_t experts[OLMOE_N_EXPERTS];
 } olmoe_layer_t;
 
-/* Loaded OLMoE model. All weight buffers are owned by the model and freed
- * by olmoe_model_free. `bufs` is the flat pointer table (one entry per
- * tensor read, in shard/read order) that owns the actual allocations; the
- * struct-field pointers above are aliases into the same memory. Lifetime:
+/* Loaded OLMoE model. One contiguous heap block (calloc'd by the loader);
+ * every weight field is a zero-initialized array so there are no individual
+ * mallocs or frees. The loader fread's shard bytes directly into the right
+ * field offsets. Lifetime:
  *
  *     olmoe_model_t *m = olmoe_model_load("/path/to/model_dir");
  *     ... read m->layers[i].self_attn.q_proj ...
  *     olmoe_model_free(m);
  */
 typedef struct {
-    olmoe_bf16_t *embed_tokens;     /* [vocab, hidden]   */
-    olmoe_bf16_t *lm_head;           /* [vocab, hidden]   */
-    olmoe_bf16_t *norm;              /* [hidden]          */
-    size_t n_layers;
-    olmoe_layer_t *layers;
-
-    olmoe_bf16_t **bufs;     /* flat ownership table */
-    size_t n_bufs;
+    olmoe_bf16_t embed_tokens[OLMOE_VOCAB * OLMOE_HIDDEN]; /* [vocab, hidden]   */
+    olmoe_bf16_t lm_head[OLMOE_VOCAB * OLMOE_HIDDEN];      /* [vocab, hidden]   */
+    olmoe_bf16_t norm[OLMOE_HIDDEN];                       /* [hidden]          */
+    olmoe_layer_t layers[OLMOE_N_LAYERS];
 } olmoe_model_t;
 
 /* Load the OLMoE model from `dir`. `dir` must contain `model-*.safetensors`
  * shards (the index and config are NOT read at runtime; their layout is
  * baked into the binary by scripts/generate_model_layout.py at build time).
  *
- * Returns NULL on any I/O, allocation, or layout mismatch (the loader
- * validates each shard's tensor count, byte sizes, and EOF after the
- * last tensor against the baked layout).
+ * The returned struct is one calloc'd block (~12.9 GiB); weights are
+ * written in place via fread. Returns NULL on any I/O or layout mismatch.
  *
  * Example:
  *     olmoe_model_t *m = olmoe_model_load("models/OLMoE-1B-7B-0924-Instruct");

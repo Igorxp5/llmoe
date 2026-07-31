@@ -253,9 +253,7 @@ olmoe_status_t olmoe_forward(const olmoe_model_t * restrict m,
     olmoe_embed_forward(m, token_ids, seq_len, scratch->hidden_in);
     olmoe_act_t *h_in = scratch->hidden_in;
     olmoe_act_t *h_out = scratch->hidden_out;
-    /* Loop over m->n_layers (not the baked OLMOE_N_LAYERS) so a synthetic
-     * low-RAM model may set n_layers smaller for end-to-end validation. */
-    for (size_t l = 0; l < m->n_layers; ++l) {
+    for (size_t l = 0; l < (size_t)OLMOE_N_LAYERS; ++l) {
         run_layer(&m->layers[l], h_in, seq_len, pos, l, scratch, h_out);
         olmoe_act_t *tmp = h_in; h_in = h_out; h_out = tmp;
     }

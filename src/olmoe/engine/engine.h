@@ -168,8 +168,7 @@ void olmoe_expert_down_forward(const olmoe_expert_t * restrict e,
  * order using `scratch` for intermediate storage. `pos` is the absolute
  * position of the first token in `token_ids` within the full sequence;
  * pass 0 for prefill and the current cached length for incremental decode.
- * `m->n_layers` drives the per-layer loop (not the baked OLMOE_N_LAYERS),
- * so synthetic low-RAM models may set n_layers smaller.
+ * The per-layer loop is driven by the baked OLMOE_N_LAYERS constant.
  * Lifetime: `m` and `scratch` are borrowed for the call; `logits_out` is
  * caller-owned (commonly `scratch->logits`).
  *

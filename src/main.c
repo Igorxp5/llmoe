@@ -26,8 +26,8 @@ static olmoe_model_t *load_model(const char *dir)
         return NULL;
     }
     double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
-    fprintf(stderr, "[debug] Loaded model: %zu layers (%.3f s)\n",
-            m->n_layers, secs);
+    fprintf(stderr, "[debug] Loaded model: %d layers (%.3f s)\n",
+            OLMOE_N_LAYERS, secs);
     return m;
 }
 

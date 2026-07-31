@@ -1,14 +1,15 @@
-/* OLMoE model loader: read model-*.safetensors shards into the typed
- * hierarchical `olmoe_model_t` without ever parsing JSON at runtime.
+/* OLMoE model loader: read model-*.safetensors shards directly into the
+ * typed hierarchical `olmoe_model_t` without ever parsing JSON at runtime.
  *
  * The full tensor layout (which shard, which slot, which byte-count per
  * kind) is baked by scripts/generate_model_layout.py and embedded here via
- * layer.h. At runtime this file just:
- *   1. opens each shard listed in OLMOE_SHARD_FILE_NAMES (in order),
- *   2. skips the 8-byte LE header-length + JSON header,
- *   3. walks OLMOE_SHARD_LAYOUT[shard] and fread()s `bytes_for_kind(kind)`
- *      bytes into a freshly malloc'd buffer,
- *   4. routes the buffer to the right field of the model struct.
+ * layers.h. At runtime this file just:
+ *   1. allocates one `olmoe_model_t` via calloc (~12.9 GiB, zero-init'd),
+ *   2. opens each shard listed in OLMOE_SHARD_FILE_NAMES (in order),
+ *   3. skips the 8-byte LE header-length + JSON header,
+ *   4. walks OLMOE_SHARD_LAYOUT[shard] and fread()s `bytes_for_kind(kind)`
+ *      bytes directly into the array-field at the right offset,
+ *   5. returns the populated struct (or NULL + free on any error).
  *
  * Rationale (no runtime JSON): see docs/layer_module.md.
  */
@@ -48,60 +49,51 @@ static size_t bytes_for_kind(olmoe_slot_kind_t kind)
     case OLMOE_KIND_EXPERT_DOWN:
         return (size_t)OLMOE_HIDDEN * OLMOE_INTER * 2;
     }
-    /* Unreachable for a well-formed layout, but C does not know the enum
-     * is exhaustive. Avoid -Wreturn-type by returning 0; placement will
-     * then malloc(0) and fail the fread guard. */
     return 0;
 }
 
-/* Route a freshly-read buffer into the model struct. Also records it in the
- * flat ownership table at `slot`, so cleanup never needs to walk the
- * hierarchy. */
-static int place_tensor(olmoe_model_t *m,
-                        const olmoe_tensor_desc_t *d,
-                        olmoe_bf16_t *buf, size_t slot)
+/* Return a pointer to the array field inside `m` identified by `d`.
+ * The caller fread's `bytes_for_kind(d->kind)` bytes into this pointer. */
+static olmoe_bf16_t *target_field(olmoe_model_t *m,
+                                  const olmoe_tensor_desc_t *d)
 {
-    m->bufs[slot] = buf;
     switch (d->kind) {
-    case OLMOE_KIND_EMBED:    m->embed_tokens = buf; break;
-    case OLMOE_KIND_LM_HEAD:  m->lm_head = buf; break;
-    case OLMOE_KIND_NORM:     m->norm = buf; break;
+    case OLMOE_KIND_EMBED:    return m->embed_tokens;
+    case OLMOE_KIND_LM_HEAD:  return m->lm_head;
+    case OLMOE_KIND_NORM:     return m->norm;
     case OLMOE_KIND_INPUT_LN:
-        m->layers[d->layer].input_layernorm = buf; break;
+        return m->layers[d->layer].input_layernorm;
     case OLMOE_KIND_POST_LN:
-        m->layers[d->layer].post_attention_layernorm = buf; break;
+        return m->layers[d->layer].post_attention_layernorm;
     case OLMOE_KIND_Q_PROJ:
-        m->layers[d->layer].self_attn.q_proj = buf; break;
+        return m->layers[d->layer].self_attn.q_proj;
     case OLMOE_KIND_K_PROJ:
-        m->layers[d->layer].self_attn.k_proj = buf; break;
+        return m->layers[d->layer].self_attn.k_proj;
     case OLMOE_KIND_V_PROJ:
-        m->layers[d->layer].self_attn.v_proj = buf; break;
+        return m->layers[d->layer].self_attn.v_proj;
     case OLMOE_KIND_O_PROJ:
-        m->layers[d->layer].self_attn.o_proj = buf; break;
+        return m->layers[d->layer].self_attn.o_proj;
     case OLMOE_KIND_Q_NORM:
-        m->layers[d->layer].self_attn.q_norm = buf; break;
+        return m->layers[d->layer].self_attn.q_norm;
     case OLMOE_KIND_K_NORM:
-        m->layers[d->layer].self_attn.k_norm = buf; break;
+        return m->layers[d->layer].self_attn.k_norm;
     case OLMOE_KIND_MLP_GATE:
-        m->layers[d->layer].mlp_gate = buf; break;
+        return m->layers[d->layer].mlp_gate;
     case OLMOE_KIND_EXPERT_GATE:
-        m->layers[d->layer].experts[d->expert].gate_proj = buf; break;
+        return m->layers[d->layer].experts[d->expert].gate_proj;
     case OLMOE_KIND_EXPERT_UP:
-        m->layers[d->layer].experts[d->expert].up_proj = buf; break;
+        return m->layers[d->layer].experts[d->expert].up_proj;
     case OLMOE_KIND_EXPERT_DOWN:
-        m->layers[d->layer].experts[d->expert].down_proj = buf; break;
+        return m->layers[d->layer].experts[d->expert].down_proj;
     }
-    return 1;
+    return NULL;
 }
 
 static int skip_header(FILE *f)
 {
-    /* safetensors layout: [8-byte LE header-length][JSON header][data].
-     * We read the 8-byte length, then seek past the JSON header. */
     unsigned char hdr_len_buf[8];
     if (fread(hdr_len_buf, 1, 8, f) != 8)
         return 0;
-    /* header_size is u64 LE; 4 GiB headers are impossible in practice. */
     unsigned long header_size = 0;
     for (int i = 0; i < 8; ++i)
         header_size |= (unsigned long)hdr_len_buf[i] << (8 * i);
@@ -110,13 +102,10 @@ static int skip_header(FILE *f)
     return 1;
 }
 
-/* Build "dir/OLMOE_SHARD_FILE_NAMES[shard_idx]" into `out`. Returns out on
- * success, NULL if the path would overflow the buffer. */
 static char *join_shard_path(char *out, size_t cap,
                              const char *dir, const char *shard)
 {
     size_t dir_len = strlen(dir);
-    /* +1 for '/', +1 for '\0', so cap must exceed dir_len + shard_len + 2 */
     if (dir_len + strlen(shard) + 2 > cap)
         return NULL;
     memcpy(out, dir, dir_len);
@@ -126,11 +115,10 @@ static char *join_shard_path(char *out, size_t cap,
     return out;
 }
 
-/* Read one shard top-to-bottom. Updates `*slot` (the running global tensor
- * index) for the flat ownership table. Returns 0 on failure; the caller
- * then frees whatever has been loaded so far. */
+/* Read one shard top-to-bottom, directly into the static model's fields.
+ * Returns 0 on failure; the caller frees the single allocation. */
 static int load_shard(olmoe_model_t *m, const char *dir,
-                      size_t shard_idx, size_t *slot)
+                      size_t shard_idx)
 {
     char path[4096];
     if (!join_shard_path(path, sizeof path, dir,
@@ -155,31 +143,22 @@ static int load_shard(olmoe_model_t *m, const char *dir,
     for (size_t i = 0; i < n; ++i) {
         const olmoe_tensor_desc_t *d = &layout[i];
         size_t bytes = bytes_for_kind(d->kind);
-        olmoe_bf16_t *buf = malloc(bytes ? bytes : 1);
-        if (!buf) {
-            fprintf(stderr, "olmoe_model_load: oom in %s\n", path);
+        olmoe_bf16_t *dest = target_field(m, d);
+        if (!dest) {
+            fprintf(stderr,
+                "olmoe_model_load: unrecognized kind %d\n", d->kind);
             fclose(f);
             return 0;
         }
-        if (fread(buf, 1, bytes, f) != bytes) {
+        if (fread(dest, 1, bytes, f) != bytes) {
             fprintf(stderr,
                 "olmoe_model_load: short read in %s at tensor %zu\n",
                 path, i);
-            free(buf);
             fclose(f);
             return 0;
         }
-        if (!place_tensor(m, d, buf, *slot)) {
-            free(buf);
-            fclose(f);
-            return 0;
-        }
-        ++*slot;
     }
 
-    /* The baked layout is the exact data span of the shard; if there are
-     * bytes left after the last tensor, the shard drifted from the layout
-     * we compiled against. */
     int extra = fgetc(f);
     if (extra != EOF) {
         fprintf(stderr,
@@ -200,26 +179,15 @@ olmoe_model_t *olmoe_model_load(const char *dir)
     }
 
     olmoe_model_t *m = calloc(1, sizeof *m);
-    if (!m)
-        return NULL;
-    m->n_layers = OLMOE_N_LAYERS;
-    m->layers = calloc(OLMOE_N_LAYERS, sizeof *m->layers);
-    if (!m->layers) {
-        free(m);
-        return NULL;
-    }
-    m->n_bufs = OLMOE_N_TOTAL_TENSORS;
-    m->bufs = calloc(m->n_bufs, sizeof *m->bufs);
-    if (!m->bufs) {
-        free(m->layers);
-        free(m);
+    if (!m) {
+        fprintf(stderr, "olmoe_model_load: calloc(%zu) failed\n",
+                sizeof *m);
         return NULL;
     }
 
-    size_t slot = 0;
     for (size_t s = 0; s < OLMOE_N_SHARDS; ++s) {
-        if (!load_shard(m, dir, s, &slot)) {
-            olmoe_model_free(m);
+        if (!load_shard(m, dir, s)) {
+            free(m);
             return NULL;
         }
     }
@@ -228,13 +196,5 @@ olmoe_model_t *olmoe_model_load(const char *dir)
 
 void olmoe_model_free(olmoe_model_t *model)
 {
-    if (!model)
-        return;
-    if (model->bufs) {
-        for (size_t i = 0; i < model->n_bufs; ++i)
-            free(model->bufs[i]);
-        free(model->bufs);
-    }
-    free(model->layers);
     free(model);
 }
