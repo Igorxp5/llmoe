@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "kernels/cpu_softmax.h"
 #include "kernels/kernels.h"
 
 /* Scaled dot-product attention for a single head with causal masking.
@@ -31,12 +32,12 @@ static inline __attribute__((always_inline)) void sdpa_one_head(float * restrict
             scores_tmp[j] = expf(scores_tmp[j] - mx);
             sum += scores_tmp[j];
         }
+        cpu_softmax_row_norm(scores_tmp, i + 1, sum);
         float *oi = output + i * stride;
         kernels_f32_zero(oi, head_dim);
         for (size_t j = 0; j <= i; ++j) {
-            float w = scores_tmp[j] / sum;
             const float *vj = value + j * stride;
-            kernels_f32_axpy(oi, vj, w, head_dim);
+            kernels_f32_axpy(oi, vj, scores_tmp[j], head_dim);
         }
     }
 }
@@ -99,12 +100,12 @@ static inline void cpu_sdpa_incremental(float * restrict output,
                 scores[j] = expf(scores[j] - mx);
                 sum += scores[j];
             }
+            cpu_softmax_row_norm(scores, abs_pos + 1, sum);
             float *oi = output + off + i * stride;
             kernels_f32_zero(oi, head_dim);
             for (size_t j = 0; j <= abs_pos; ++j) {
-                float w = scores[j] / sum;
                 const float *vj = vh + j * stride;
-                kernels_f32_axpy(oi, vj, w, head_dim);
+                kernels_f32_axpy(oi, vj, scores[j], head_dim);
             }
         }
         free(scores);
