@@ -2,22 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
 
 #include "olmoe/engine/engine.h"
 #include "olmoe/tokenizer/tokenizer.h"
 
-#define MAX_SEQ_LEN 2048
-#define MAX_LINE 8192
-#define EOS_TOKEN_ID 50279
-
-static volatile sig_atomic_t stop_flag = 0;
-
-static void handle_sigint(int sig)
-{
-    (void)sig;
-    stop_flag = 1;
-}
+#include "repl.h"
 
 static int usage(const char *prog)
 {
@@ -25,180 +14,63 @@ static int usage(const char *prog)
     return 1;
 }
 
-static double elapsed(struct timespec a, struct timespec b)
+static olmoe_model_t *load_model(const char *dir)
 {
-    return (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
+    fprintf(stderr, "[debug] Loading model from %s\n", dir);
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    olmoe_model_t *m = olmoe_model_load(dir);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    if (!m) {
+        fprintf(stderr, "Failed to load model from %s\n", dir);
+        return NULL;
+    }
+    double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    fprintf(stderr, "[debug] Loaded model: %zu layers (%.3f s)\n",
+            m->n_layers, secs);
+    return m;
+}
+
+static int init_session(olmoe_model_t **m_out, olmoe_scratch_t *s,
+                        olmoe_token_id_t **tokens_out, const char *model_dir)
+{
+    *m_out = load_model(model_dir);
+    if (!*m_out) return 1;
+
+    if (olmoe_scratch_init(s, MAX_SEQ_LEN, MAX_SEQ_LEN) != OLMOE_OK) {
+        fprintf(stderr, "scratch init failed\n");
+        return 2;
+    }
+
+    *tokens_out = malloc(MAX_SEQ_LEN * sizeof(**tokens_out));
+    if (!*tokens_out) {
+        fprintf(stderr, "malloc failed\n");
+        return 3;
+    }
+    return 0;
+}
+
+static void teardown_session(olmoe_scratch_t *s, olmoe_token_id_t *tokens,
+                             olmoe_model_t *m)
+{
+    olmoe_scratch_free(s);
+    free(tokens);
+    olmoe_model_free(m);
 }
 
 int main(int argc, char **argv)
 {
     if (argc != 2) return usage(argv[0]);
-    const char *model_dir = argv[1];
 
-    struct timespec load_t0, load_t1, gen_t0, gen_t1;
+    int rc;
     olmoe_model_t *m = NULL;
-    olmoe_scratch_t s;
+    olmoe_scratch_t s = {0};
     olmoe_token_id_t *tokens = NULL;
-    int rc = 0;
 
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handle_sigint;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    if (sigaction(SIGINT, &sa, NULL) != 0) {
-        perror("sigaction");
-    }
+    olmoe_repl_install_sigint();
 
-    memset(&s, 0, sizeof(s));
-
-    clock_gettime(CLOCK_MONOTONIC, &load_t0);
-    m = olmoe_model_load(model_dir);
-    clock_gettime(CLOCK_MONOTONIC, &load_t1);
-    if (!m) {
-        fprintf(stderr, "Failed to load model from %s\n", model_dir);
-        rc = 1;
-        goto out;
-    }
-    fprintf(stderr, "[debug] Loaded model: %zu layers (%.3f s)\n",
-            m->n_layers, elapsed(load_t0, load_t1));
-
-    if (olmoe_scratch_init(&s, MAX_SEQ_LEN, MAX_SEQ_LEN) != OLMOE_OK) {
-        fprintf(stderr, "scratch init failed\n");
-        rc = 2;
-        goto out;
-    }
-
-    tokens = malloc(MAX_SEQ_LEN * sizeof(*tokens));
-    if (!tokens) {
-        fprintf(stderr, "malloc failed\n");
-        rc = 3;
-        goto out;
-    }
-
-    char line[MAX_LINE];
-
-    for (;;) {
-        if (stop_flag) {
-            fprintf(stderr, "\n");
-            break;
-        }
-        fprintf(stderr, "> ");
-        if (!fgets(line, sizeof(line), stdin)) {
-            fprintf(stderr, "\n");
-            break;
-        }
-
-        size_t linelen = strlen(line);
-        if (linelen > 0 && line[linelen - 1] == '\n')
-            line[linelen - 1] = '\0';
-        if (line[0] == '\0') continue;
-
-        /* Wrap user input in the OLMoE instruct chat template so the
-         * model receives the instruction format it was trained on:
-         *
-         *     <|endoftext|>
-         *     <|user|>
-         *     {user_input}
-         *     <|assistant|>
-         *
-         * Each prompt is self-contained: seq_len resets per turn rather
-         * than accumulating (multi-turn accumulation requires sparse-
-         * attention / KV-cache engineering out of scope). */
-        char prompt[MAX_LINE + 128];
-        int p_len = snprintf(prompt, sizeof(prompt),
-                             "<|endoftext|>\n<|user|>\n%s\n<|assistant|>",
-                             line);
-        if (p_len < 0 || (size_t)p_len >= sizeof(prompt)) {
-            fprintf(stderr, "[debug] prompt too long\n");
-            continue;
-        }
-
-        size_t n_tok = olmoe_tokenize(prompt, tokens, (size_t)MAX_SEQ_LEN);
-        fprintf(stderr, "[debug] input tokens: %zu\n", n_tok);
-
-        /* Reset KV cache for the new conversation turn. */
-        s.cache_len = 0;
-
-        size_t output_tokens = 0;
-        size_t dec_len = 0;
-        int next_token = 0;
-        float best_val;
-
-        clock_gettime(CLOCK_MONOTONIC, &gen_t0);
-
-        /* Prefill: process the entire prompt and populate the KV cache. */
-        if (n_tok > 0) {
-            if (olmoe_forward(m, (int *)tokens, n_tok, 0, &s, s.logits)
-                != OLMOE_OK) {
-                fprintf(stderr, "prefill failed\n");
-                break;
-            }
-            /* Sample first generated token from the last prompt position. */
-            size_t last = n_tok - 1;
-            next_token = 0;
-            best_val = s.logits[last * OLMOE_VOCAB];
-            for (int v = 1; v < OLMOE_VOCAB; ++v) {
-                float val = s.logits[last * OLMOE_VOCAB + v];
-                if (val > best_val) { best_val = val; next_token = v; }
-            }
-            if (next_token != EOS_TOKEN_ID) {
-                tokens[n_tok] = (olmoe_token_id_t)next_token;
-                output_tokens = 1;
-            }
-        }
-
-        /* Decode loop: generate one token at a time using the KV cache. */
-        for (size_t pos = n_tok; pos + 1 < MAX_SEQ_LEN; ++pos) {
-            if (stop_flag) break;
-            if (output_tokens == 0) break;
-
-            if (olmoe_forward(m, (int *)&tokens[pos], 1, pos, &s, s.logits)
-                != OLMOE_OK) {
-                fprintf(stderr, "forward failed at pos %zu\n", pos);
-                break;
-            }
-
-            /* Sample from the single-token logits. */
-            next_token = 0;
-            best_val = s.logits[0];
-            for (int v = 1; v < OLMOE_VOCAB; ++v) {
-                float val = s.logits[v];
-                if (val > best_val) { best_val = val; next_token = v; }
-            }
-
-            if (next_token == EOS_TOKEN_ID) break;
-            tokens[pos + 1] = (olmoe_token_id_t)next_token;
-            output_tokens++;
-
-            size_t new_len = olmoe_decode(tokens + n_tok,
-                                          output_tokens, NULL, 0);
-            if (new_len > dec_len) {
-                char *dec = malloc(new_len + 1);
-                if (dec) {
-                    olmoe_decode(tokens + n_tok, output_tokens,
-                                 dec, new_len + 1);
-                    fwrite(dec + dec_len, 1, new_len - dec_len, stdout);
-                    fflush(stdout);
-                    free(dec);
-                }
-                dec_len = new_len;
-            }
-        }
-        clock_gettime(CLOCK_MONOTONIC, &gen_t1);
-
-        fflush(stdout);
-        if (output_tokens > 0) printf("\n");
-
-        fprintf(stderr, "[debug] output tokens: %zu, speed: %.2f tok/s\n",
-                output_tokens,
-                output_tokens / elapsed(gen_t0, gen_t1));
-        stop_flag = 0;
-    }
-
-out:
-    olmoe_scratch_free(&s);
-    free(tokens);
-    olmoe_model_free(m);
+    rc = init_session(&m, &s, &tokens, argv[1]);
+    if (rc == 0) olmoe_repl_run(m, &s, tokens);
+    teardown_session(&s, tokens, m);
     return rc;
 }
