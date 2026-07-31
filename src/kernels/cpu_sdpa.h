@@ -22,10 +22,8 @@ static inline __attribute__((always_inline)) void sdpa_one_head(float * restrict
         const float *qi = query + i * stride;
         float mx = -INFINITY;
         for (size_t j = 0; j <= i; ++j) {
-            float dot = 0.0f;
             const float *kj = key + j * stride;
-            for (size_t d = 0; d < head_dim; ++d) dot += qi[d] * kj[d];
-            scores_tmp[j] = dot * scale;
+            scores_tmp[j] = kernels_f32_dot(qi, kj, head_dim) * scale;
             if (scores_tmp[j] > mx) mx = scores_tmp[j];
         }
         float sum = 0.0f;
@@ -34,11 +32,11 @@ static inline __attribute__((always_inline)) void sdpa_one_head(float * restrict
             sum += scores_tmp[j];
         }
         float *oi = output + i * stride;
-        for (size_t d = 0; d < head_dim; ++d) oi[d] = 0.0f;
+        kernels_f32_zero(oi, head_dim);
         for (size_t j = 0; j <= i; ++j) {
             float w = scores_tmp[j] / sum;
             const float *vj = value + j * stride;
-            for (size_t d = 0; d < head_dim; ++d) oi[d] += w * vj[d];
+            kernels_f32_axpy(oi, vj, w, head_dim);
         }
     }
 }
@@ -92,11 +90,8 @@ static inline void cpu_sdpa_incremental(float * restrict output,
             const float *qi = qh + i * stride;
             float mx = -INFINITY;
             for (size_t j = 0; j <= abs_pos; ++j) {
-                float dot = 0.0f;
                 const float *kj = kh + j * stride;
-                for (size_t d = 0; d < head_dim; ++d)
-                    dot += qi[d] * kj[d];
-                scores[j] = dot * scale;
+                scores[j] = kernels_f32_dot(qi, kj, head_dim) * scale;
                 if (scores[j] > mx) mx = scores[j];
             }
             float sum = 0.0f;
@@ -105,12 +100,11 @@ static inline void cpu_sdpa_incremental(float * restrict output,
                 sum += scores[j];
             }
             float *oi = output + off + i * stride;
-            for (size_t d = 0; d < head_dim; ++d) oi[d] = 0.0f;
+            kernels_f32_zero(oi, head_dim);
             for (size_t j = 0; j <= abs_pos; ++j) {
                 float w = scores[j] / sum;
                 const float *vj = vh + j * stride;
-                for (size_t d = 0; d < head_dim; ++d)
-                    oi[d] += w * vj[d];
+                kernels_f32_axpy(oi, vj, w, head_dim);
             }
         }
         free(scores);
