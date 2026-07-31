@@ -6,6 +6,8 @@ CFLAGS   = -D_POSIX_C_SOURCE=200112L \
            -g -O3 \
            -Wno-discarded-qualifiers \
            -fopenmp \
+           -fno-math-errno \
+           -fopenmp-simd \
            -DIREE_ALLOCATOR_SYSTEM_CTL=iree_allocator_libc_ctl
 
 # ── IREE installation (built via CMake) ──────────────────────────────────────

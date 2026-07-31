@@ -171,6 +171,7 @@ static void expert_accumulate(const olmoe_expert_t *e, const olmoe_act_t *tok,
 {
     olmoe_expert_gate_forward(e, tok, 1, gate);
     olmoe_expert_up_forward(e, tok, 1, up);
+    #pragma omp simd
     for (size_t j = 0; j < (size_t)OLMOE_INTER; ++j)
         act[j] = cpu_silu(gate[j]) * up[j];
     olmoe_expert_down_forward(e, act, 1, down);
