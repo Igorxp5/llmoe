@@ -3,6 +3,7 @@
 
 #include <immintrin.h>
 #include <math.h>
+#include <omp.h>
 
 #include "kernels/kernels.h"
 
@@ -52,16 +53,43 @@ static inline __attribute__((always_inline)) void cpu_softmax_row_norm(float * r
         output[r] /= sum;
 }
 
+/* Deterministic reduce of per-thread partial sums: 16-lane AVX-512 chunks
+ * are accumulated with _mm512_add_ps, reduced with _mm512_reduce_add_ps in
+ * a fixed order, then the scalar tail is folded in ascending index. */
+static inline __attribute__((always_inline)) float cpu_softmax_sum_partials(
+    const float * restrict partial_sums, size_t nthreads)
+{
+    size_t r = 0;
+    __m512 vsum = _mm512_setzero_ps();
+    for (; r + 16 <= nthreads; r += 16)
+        vsum = _mm512_add_ps(vsum, _mm512_loadu_ps(partial_sums + r));
+    float sum = _mm512_reduce_add_ps(vsum);
+    if (__builtin_expect(r < nthreads, 0))
+        for (; r < nthreads; ++r)
+            sum += partial_sums[r];
+    return sum;
+}
+
 static inline void cpu_softmax(float * restrict output,
                               const float * restrict input, size_t dim)
 {
     float mx = cpu_softmax_row_max(input, dim);
-    float sum = 0.0f;
-    #pragma omp parallel for schedule(static) reduction(+:sum)
-    for (size_t r = 0; r < dim; ++r) {
-        output[r] = expf(input[r] - mx);
-        sum += output[r];
+    int nthreads = omp_get_max_threads();
+    float partial_sums[nthreads];
+    for (int t = 0; t < nthreads; ++t)
+        partial_sums[t] = 0.0f;
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        float partial = 0.0f;
+        #pragma omp for schedule(static)
+        for (size_t r = 0; r < dim; ++r) {
+            output[r] = expf(input[r] - mx);
+            partial += output[r];
+        }
+        partial_sums[tid] = partial;
     }
+    float sum = cpu_softmax_sum_partials(partial_sums, (size_t)nthreads);
     cpu_softmax_row_norm(output, dim, sum);
 }
 
