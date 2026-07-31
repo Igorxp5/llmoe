@@ -13,7 +13,7 @@
 #include "kernels/cpu_sdpa.h"
 #include "kernels/cpu_silu.h"
 
-static olmoe_act_t *alloc_act_buffer(size_t n)
+static inline olmoe_act_t *alloc_act_buffer(size_t n)
 {
     if (n == 0) {
         return NULL;
@@ -108,7 +108,7 @@ void olmoe_scratch_free(olmoe_scratch_t * restrict s)
 /* Element-wise residual add: out[i] += x[i] for n lanes. Reused by both the
  * attention and MoE block residuals so the integrator names the buffer
  * carrying the live residual stream in exactly one place. */
-static void add_residual(olmoe_act_t * restrict out,
+static inline void add_residual(olmoe_act_t * restrict out,
                          const olmoe_act_t * restrict x, size_t n)
 {
     #pragma omp parallel for schedule(static)
@@ -169,7 +169,7 @@ static void attention_block(const olmoe_layer_t * restrict L,
  * down-projection into the MoE accumulator row. The per-token [inter]x3 and
  * [hidden] scratch buffers are owned by moe_block and reused across all
  * (token, expert) pairs of the block to avoid per-call allocation. */
-static void expert_accumulate(const olmoe_expert_t * restrict e,
+static inline void expert_accumulate(const olmoe_expert_t * restrict e,
                               const olmoe_act_t * restrict tok,
                               olmoe_act_t * restrict acc_row, float w,
                               float * restrict gate, float * restrict up,

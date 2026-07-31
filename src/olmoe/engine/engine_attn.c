@@ -7,7 +7,7 @@
 
 /* Shared by the four attn projections (q/k/v/o) so the matmul call site is
  * written once, not copy-pasted four times. */
-static void attn_proj_forward(const olmoe_bf16_t * restrict w,
+static inline void attn_proj_forward(const olmoe_bf16_t * restrict w,
                               const olmoe_act_t * restrict x, size_t seq_len,
                               olmoe_act_t * restrict out)
 {

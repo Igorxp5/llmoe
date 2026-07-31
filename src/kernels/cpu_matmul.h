@@ -19,7 +19,7 @@ static inline __attribute__((always_inline)) float cpu_matmul_dot_bf16(const flo
 /* Full BF16 matrix multiplication: output[M][N] = a_matrix[M][K] @ b_matrix[N][K]^T.
  * a_matrix is FP32, b_matrix is BF16. The inner dimension `inner_dim_k` must be
  * a multiple of 16 (AVX-512 requirement). */
-static inline __attribute__((always_inline)) void cpu_matmul_bf16(float * restrict output,
+static inline void cpu_matmul_bf16(float * restrict output,
                                    const float * restrict a_matrix,
                                    const uint16_t * restrict b_matrix,
                                    size_t rows_m, size_t cols_n,

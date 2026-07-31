@@ -25,7 +25,7 @@ static inline __attribute__((always_inline)) void apply_rope_head(float * restri
 /* Batched RoPE: apply rotary embeddings to all heads in `x_tensor`.
  * Layout: [num_tokens, num_heads, head_dim]. `position_offset` is the
  * absolute position of the first token (used for incremental decoding). */
-static inline __attribute__((always_inline)) void cpu_rope(float * restrict x_tensor, size_t num_tokens,
+static inline void cpu_rope(float * restrict x_tensor, size_t num_tokens,
                             size_t position_offset, size_t num_heads,
                             size_t head_dim, float theta)
 {

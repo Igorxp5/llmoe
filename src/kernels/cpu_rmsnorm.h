@@ -46,7 +46,7 @@ static inline __attribute__((always_inline)) void cpu_rmsnorm_row(float *output,
 
 /* Batched RMSNorm over `num_rows` vectors of length `dim`.
  * Each row i: output[i] = input[i] / sqrt(mean(input[i]^2) + epsilon) * weight */
-static inline __attribute__((always_inline)) void cpu_rmsnorm(float *output, const float *input,
+static inline void cpu_rmsnorm(float *output, const float *input,
                                 const uint16_t * restrict weight,
                                 size_t num_rows, size_t dim, float epsilon)
 {

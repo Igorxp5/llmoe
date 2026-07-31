@@ -52,7 +52,7 @@ static inline __attribute__((always_inline)) void cpu_softmax_row_norm(float * r
         output[r] /= sum;
 }
 
-static inline __attribute__((always_inline)) void cpu_softmax(float * restrict output,
+static inline void cpu_softmax(float * restrict output,
                               const float * restrict input, size_t dim)
 {
     float mx = cpu_softmax_row_max(input, dim);
