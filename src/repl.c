@@ -7,6 +7,7 @@
 #include "olmoe/engine/engine.h"
 #include "olmoe/tokenizer/tokenizer.h"
 
+#include "kernels/cpu_argmax.h"
 #include "repl.h"
 
 #define MAX_LINE     8192
@@ -30,19 +31,6 @@ void olmoe_repl_install_sigint(void)
     if (sigaction(SIGINT, &sa, NULL) != 0) {
         perror("sigaction");
     }
-}
-
-static int sample_argmax(const float *logits, size_t n)
-{
-    int best_idx = 0;
-    float best_val = logits[0];
-    for (size_t v = 1; v < n; ++v) {
-        if (logits[v] > best_val) {
-            best_val = logits[v];
-            best_idx = (int)v;
-        }
-    }
-    return best_idx;
 }
 
 static int read_user_line(char *line, size_t cap)
@@ -95,7 +83,7 @@ static int prefill_and_first_token(olmoe_model_t *m, olmoe_scratch_t *s,
         return EOS_TOKEN_ID;
     }
     size_t last = n_tok - 1;
-    int next = sample_argmax(s->logits + last * OLMOE_VOCAB, OLMOE_VOCAB);
+    int next = (int)cpu_argmax(s->logits + last * OLMOE_VOCAB, OLMOE_VOCAB);
     if (next == EOS_TOKEN_ID) return EOS_TOKEN_ID;
     tokens[n_tok] = (olmoe_token_id_t)next;
     return next;
@@ -129,7 +117,7 @@ static void decode_until_eos(olmoe_model_t *m, olmoe_scratch_t *s,
             return;
         }
 
-        int next = sample_argmax(s->logits, OLMOE_VOCAB);
+        int next = (int)cpu_argmax(s->logits, OLMOE_VOCAB);
         if (__builtin_expect(next == EOS_TOKEN_ID, 0)) return;
         tokens[pos + 1] = (olmoe_token_id_t)next;
         (*output_tokens)++;

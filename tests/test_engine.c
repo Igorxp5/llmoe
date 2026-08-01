@@ -10,6 +10,7 @@ int test_engine_matmul_pass(void);
 int test_engine_norm_pass(void);
 int test_engine_mlp_pass(void);
 int test_engine_fwd_pass(void);
+int test_engine_argmax_pass(void);
 
 /* ---------- checks ------------------------------------------------------ */
 
@@ -118,5 +119,6 @@ int test_engine_stubs_pass(void)
     failed += test_engine_norm_pass();
     failed += test_engine_mlp_pass();
     failed += test_engine_fwd_pass();
+    failed += test_engine_argmax_pass();
     return failed;
 }
