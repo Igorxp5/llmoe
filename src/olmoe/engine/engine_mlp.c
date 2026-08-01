@@ -2,8 +2,6 @@
  * EXPERT_GATE / EXPERT_UP / EXPERT_DOWN). The router (mlp_gate) is
  * implemented; expert gate/up/down are stubs for later agents. */
 
-#include <stdlib.h>
-
 #include "olmoe/engine/engine.h"
 #include "kernels/cpu_matmul.h"
 #include "kernels/cpu_softmax.h"
@@ -30,19 +28,26 @@ static inline void route_one_token(const float * restrict logits_row,
     cpu_topk_desc(probs, n_experts, k, idx, w);
 }
 
+/* Router forward: expert logits = x @ mlp_gate^T, then softmax+top-K per
+ * token. Logits are computed one token at a time into a fixed stack buffer:
+ * the engine never mallocs activations (scratch is caller-owned), and a
+ * per-row dot is bit-identical to the batched matmul it replaces — each
+ * output lane is an independent k-reduction with a fixed accumulation order. */
 void olmoe_mlp_gate_forward(const olmoe_bf16_t * restrict w,
                             const olmoe_act_t * restrict x, size_t seq_len,
                             int * restrict topk_idx,
                             olmoe_act_t * restrict topk_w)
 {
     size_t n = (size_t)OLMOE_N_EXPERTS, k = (size_t)OLMOE_N_EXPERTS_PER_TOK;
-    float *logits = malloc(seq_len * n * sizeof(float));
-    cpu_matmul_bf16(logits, x, w, seq_len, n, (size_t)OLMOE_HIDDEN);
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < seq_len; ++i)
-        route_one_token(logits + i * n, topk_idx + i * k,
-                        topk_w + i * k, n, k);
-    free(logits);
+    for (size_t i = 0; i < seq_len; ++i) {
+        float logits[OLMOE_N_EXPERTS];
+        for (size_t j = 0; j < n; ++j)
+            logits[j] = cpu_matmul_dot_bf16(x + i * (size_t)OLMOE_HIDDEN,
+                                            w + j * (size_t)OLMOE_HIDDEN,
+                                            (size_t)OLMOE_HIDDEN);
+        route_one_token(logits, topk_idx + i * k, topk_w + i * k, n, k);
+    }
 }
 
 /* Shared by the three expert matmuls: gate/up project x [tok, hidden]
