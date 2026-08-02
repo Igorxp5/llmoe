@@ -9,6 +9,7 @@
 #include "olmoe/engine/engine.h"
 #include "olmoe/engine/engine_internal.h"
 #include "kernels/kernels.h"
+#include "kernels/cpu_matmul.h"
 #include "kernels/cpu_rope.h"
 #include "kernels/cpu_sdpa.h"
 #include "kernels/cpu_silu.h"
@@ -229,24 +230,63 @@ static inline void expert_accumulate_slot(const olmoe_layer_t * restrict L,
                       acc_row, w, gate, up, down, act);
 }
 
-/* Decode (seq == 1): the token's 8 expert slots run on separate threads,
- * each folding into its own row of `acc_slots` (disjoint writers, so the
- * expert_accumulate RMW is race-free), then the rows are combined into
- * s->expert_out in ascending slot order so the sum is bit-reproducible
- * run-to-run. collapse(2) here was a data race — see
- * docs/moe_expert_accumulate_race.md. */
+/* Decode (seq == 1): expert compute is decoupled from the accumulate so the
+ * parallel space spans (slot x output-row) instead of the 8 slots alone,
+ * lifting the 8-thread cap of the previous slot-parallel path. Every phase
+ * below writes disjoint per-(slot,row) elements, so the cross-thread RMW that
+ * collapse(2) caused here (see docs/moe_expert_accumulate_race.md) cannot
+ * recur; the fold is a separate pass. The fold keeps the prior op order
+ * (v_r = w_r * down_r, summed in ascending slot order) so the result is
+ * bit-reproducible. Prefill still uses moe_block_prefill/expert_accumulate. */
 static void moe_block_decode(const olmoe_layer_t * restrict L,
                              const olmoe_scratch_t * restrict s)
 {
-    olmoe_act_t acc_slots[OLMOE_N_EXPERTS_PER_TOK][OLMOE_HIDDEN] = {{0}};
-    #pragma omp parallel for schedule(static)
-    for (size_t r = 0; r < (size_t)OLMOE_N_EXPERTS_PER_TOK; ++r)
-        expert_accumulate_slot(L, s, 0, r, acc_slots[r]);
-    for (size_t r = 0; r < (size_t)OLMOE_N_EXPERTS_PER_TOK; ++r)
-        for (size_t h = 0; h < (size_t)OLMOE_HIDDEN; h += 16)
-            _mm512_storeu_ps(s->expert_out + h,
-                _mm512_add_ps(_mm512_loadu_ps(s->expert_out + h),
-                              _mm512_loadu_ps(acc_slots[r] + h)));
+    const size_t n_slots  = (size_t)OLMOE_N_EXPERTS_PER_TOK;
+    const size_t n_inter  = (size_t)OLMOE_INTER;
+    const size_t n_hidden = (size_t)OLMOE_HIDDEN;
+    float gate_all[OLMOE_N_EXPERTS_PER_TOK][OLMOE_INTER];
+    float up_all[OLMOE_N_EXPERTS_PER_TOK][OLMOE_INTER];
+    float act_all[OLMOE_N_EXPERTS_PER_TOK][OLMOE_INTER];
+    float down_all[OLMOE_N_EXPERTS_PER_TOK][OLMOE_HIDDEN];
+
+    #pragma omp parallel
+    {
+        #pragma omp for schedule(static) collapse(2) nowait
+        for (size_t r = 0; r < n_slots; ++r)
+            for (size_t j = 0; j < n_inter; ++j) {
+                const olmoe_expert_t *e = &L->experts[s->topk_idx[r]];
+                gate_all[r][j] = cpu_matmul_dot_bf16(s->ctx,
+                    e->gate_proj + j * n_hidden, n_hidden);
+            }
+        #pragma omp for schedule(static) collapse(2) nowait
+        for (size_t r = 0; r < n_slots; ++r)
+            for (size_t j = 0; j < n_inter; ++j) {
+                const olmoe_expert_t *e = &L->experts[s->topk_idx[r]];
+                up_all[r][j] = cpu_matmul_dot_bf16(s->ctx,
+                    e->up_proj + j * n_hidden, n_hidden);
+            }
+        #pragma omp for simd schedule(static) collapse(2)
+        for (size_t r = 0; r < n_slots; ++r)
+            for (size_t j = 0; j < n_inter; ++j)
+                act_all[r][j] = cpu_silu(gate_all[r][j]) * up_all[r][j];
+        #pragma omp for schedule(static) collapse(2)
+        for (size_t r = 0; r < n_slots; ++r)
+            for (size_t h = 0; h < n_hidden; ++h) {
+                const olmoe_expert_t *e = &L->experts[s->topk_idx[r]];
+                down_all[r][h] = cpu_matmul_dot_bf16(act_all[r],
+                    e->down_proj + h * n_inter, n_inter);
+            }
+        #pragma omp for schedule(static)
+        for (size_t h = 0; h < n_hidden; h += 16) {
+            __m512 acc = _mm512_loadu_ps(s->expert_out + h);
+            for (size_t r = 0; r < n_slots; ++r) {
+                __m512 v = _mm512_mul_ps(_mm512_set1_ps(s->topk_w[r]),
+                                         _mm512_loadu_ps(down_all[r] + h));
+                acc = _mm512_add_ps(acc, v);
+            }
+            _mm512_storeu_ps(s->expert_out + h, acc);
+        }
+    }
 }
 
 /* Prefill (seq > 1): one token per iteration; the token's 8 expert slots
