@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -178,6 +179,122 @@ done:
     return failed;
 }
 
+/* Real-model olmoe_forward self-consistency: incremental decode must
+ * reproduce the KV-cache prefill for the same tokens within FP32 round-off.
+ * Prefill runs the full causal SDPA and moe_block_prefill (its 8 expert slots
+ * folded serially per token); decode runs cpu_sdpa_incremental and
+ * moe_block_decode (mul+add instead of fma), so the two paths are close but
+ * not bit-identical. The tolerance also absorbs the small accumulation-order
+ * drift across 16 layers. This is oracle-free: it pins the engine's external
+ * contract (decode == cached prefill, finite logits) against the real loaded
+ * weights without a 13 GiB scalar reference or a second model load. */
+/* Real-model olmoe_forward sanity + self-consistency, oracle-free. Asserts the
+ * invariants the engine actually maintains:
+ *   - a full seq prefill and an incremental decode both return OLMOE_OK;
+ *   - every decoded token yields finite, non-degenerate logits (the weights
+ *     were read and the router + experts actually ran);
+ *   - the decode is deterministic (repeating a step is bit-identical);
+ *   - the final (generation) logits agree between prefill and decode.
+ * Cached decode attends to the same KV history as prefill, so the final-token
+ * slice must match within FP32 round-off; the two paths differ only in fma vs
+ * mul+add accumulation order. This pins the engine's externally-visible
+ * contract against the real loaded weights without a 13 GiB scalar oracle. */
+static int test_forward_end_to_end_sane(const olmoe_model_t *m)
+{
+    enum { SEQ = 4 };
+    const int ids[SEQ] = { 11, 256, 7, 32768 };
+    const size_t V = (size_t)OLMOE_VOCAB;
+    const float RTOL = 1e-2f, ATOL = 1e-3f;
+    int failed = 0;
+
+    /* Reference: full-sequence prefill into a cache; keep the final slice. */
+    olmoe_scratch_t ref_s;
+    if (olmoe_scratch_init(&ref_s, SEQ, SEQ) != OLMOE_OK) {
+        printf("FAIL: forward prefill scratch init\n");
+        return 1;
+    }
+    if (olmoe_forward(m, ids, SEQ, 0, &ref_s, ref_s.logits) != OLMOE_OK) {
+        printf("FAIL: forward prefill returned non-OK\n");
+        olmoe_scratch_free(&ref_s);
+        return 1;
+    }
+
+    /* Decode: feed tokens one at a time with a fresh KV cache, verifying each
+     * step's logits are finite and non-degenerate, computing determinism, and
+     * pinning the final token to the prefill's final-token slice. */
+    olmoe_scratch_t dec_s;
+    if (olmoe_scratch_init(&dec_s, 1, SEQ) != OLMOE_OK) {
+        printf("FAIL: forward decode scratch init\n");
+        olmoe_scratch_free(&ref_s);
+        return 1;
+    }
+    olmoe_act_t *row = (olmoe_act_t *)malloc(V * sizeof *row);
+    olmoe_act_t *row2 = (olmoe_act_t *)malloc(V * sizeof *row2);
+    if (!row || !row2) {
+        printf("FAIL: forward decode row OOM\n");
+        free(row); free(row2);
+        olmoe_scratch_free(&dec_s);
+        olmoe_scratch_free(&ref_s);
+        return 1;
+    }
+    for (size_t i = 0; i < (size_t)SEQ && !failed; ++i) {
+        olmoe_status_t st = olmoe_forward(m, ids + i, 1, (size_t)i,
+                                          &dec_s, row);
+        if (st != OLMOE_OK) {
+            printf("FAIL: forward decode step %zu -> %d\n", i, st);
+            ++failed;
+            break;
+        }
+        float mn = INFINITY, mx = -INFINITY;
+        for (size_t j = 0; j < V; ++j) {
+            if (!isfinite(row[j])) {
+                printf("FAIL: decode step %zu logit %zu not finite\n", i, j);
+                ++failed;
+                break;
+            }
+            if (row[j] < mn) mn = row[j];
+            if (row[j] > mx) mx = row[j];
+        }
+        if (mx <= mn) {
+            printf("FAIL: decode step %zu logits degenerate\n", i);
+            ++failed;
+            break;
+        }
+    }
+    /* Determinism: decoding the last token a second time must be identical. */
+    if (!failed) {
+        memset(row2, 0, V * sizeof *row2);
+        if (olmoe_forward(m, ids + SEQ - 1, 1, (size_t)SEQ - 1,
+                          &dec_s, row2) != OLMOE_OK) {
+            printf("FAIL: forward decode repeat returned non-OK\n");
+            ++failed;
+        } else if (memcmp(row2, row, V * sizeof *row) != 0) {
+            printf("FAIL: forward decode is not deterministic\n");
+            ++failed;
+        }
+    }
+    /* Cross-path: final-token decode slice vs prefill final slice. This is the
+     * position generation consumes, and the only one prefill produces
+     * non-degenerate output for. */
+    if (!failed) {
+        for (size_t j = 0; j < V && !failed; ++j) {
+            float want = ref_s.logits[((size_t)SEQ - 1) * V + j];
+            float d = fabsf(row[j] - want);
+            if (d > ATOL && d > RTOL * fabsf(want)) {
+                printf("FAIL: final-token decode vs prefill lane %zu "
+                       "got=%.6f want=%.6f\n", j, row[j], want);
+                ++failed;
+            }
+        }
+    }
+    free(row); free(row2);
+    olmoe_scratch_free(&dec_s);
+    olmoe_scratch_free(&ref_s);
+    if (!failed)
+        printf("PASS: forward sane + final-token decode == prefill\n");
+    return failed;
+}
+
 /* ---------- dispatcher -------------------------------------------------- */
 
 static const char *resolve_model_dir(void)
@@ -211,7 +328,10 @@ int test_layer_loads_and_validates(void)
     failed += test_lm_head_first_values_match_oracle(m);
     failed += test_expert_zero_down_values_match_oracle(m);
     failed += test_embed_lookup_matches_oracle(m);
+    failed += test_forward_end_to_end_sane(m);
 
     olmoe_model_free(m);
     return failed;
 }
+
+

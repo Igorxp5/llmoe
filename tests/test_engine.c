@@ -68,18 +68,26 @@ static int test_forward_zero_seq_returns_ok(void)
 {
     olmoe_scratch_t s;
     olmoe_scratch_init(&s, 4, 0);
-    olmoe_model_t empty_model;
-    memset(&empty_model, 0, sizeof empty_model);
+    /* olmoe_model_t is a ~13 GiB fixed-size struct; the all-zero weights
+     * must live on the heap, not the stack (a stack allocation would smash
+     * the guard page and SIGSEGV). */
+    olmoe_model_t *empty_model = calloc(1, sizeof *empty_model);
+    if (!empty_model) {
+        printf("FAIL: forward zero-seq model calloc OOM\n");
+        olmoe_scratch_free(&s);
+        return 1;
+    }
 
     int ids[] = {1, 2, 3, 4};
 
     int failed = 0;
-    olmoe_status_t st = olmoe_forward(&empty_model, ids, 0, 0, &s, s.logits);
+    olmoe_status_t st = olmoe_forward(empty_model, ids, 0, 0, &s, s.logits);
     if (st != OLMOE_OK) {
         printf("FAIL: forward(seq=0) -> %d (want OK)\n", st);
         ++failed;
     }
     if (!failed) printf("PASS: forward zero-seq returns OK\n");
+    free(empty_model);
     olmoe_scratch_free(&s);
     return failed;
 }
@@ -89,18 +97,24 @@ static int test_forward_oversize_seq_returns_shape(void)
 {
     olmoe_scratch_t s;
     olmoe_scratch_init(&s, 4, 0);
-    olmoe_model_t empty_model;
-    memset(&empty_model, 0, sizeof empty_model);
+    /* ~13 GiB all-zero weights on the heap (stack would SIGSEGV). */
+    olmoe_model_t *empty_model = calloc(1, sizeof *empty_model);
+    if (!empty_model) {
+        printf("FAIL: forward oversize model calloc OOM\n");
+        olmoe_scratch_free(&s);
+        return 1;
+    }
     int ids[] = {1, 2, 3, 4, 5, 6, 7, 8};
 
     int failed = 0;
-    olmoe_status_t st = olmoe_forward(&empty_model, ids, 8, 0, &s, s.logits);
+    olmoe_status_t st = olmoe_forward(empty_model, ids, 8, 0, &s, s.logits);
     if (st != OLMOE_ERR_SHAPE) {
         printf("FAIL: forward(seq=8 on scratch=4) -> %d (want ERR_SHAPE)\n", st);
         ++failed;
     } else {
         printf("PASS: forward oversize seq rejected with ERR_SHAPE\n");
     }
+    free(empty_model);
     olmoe_scratch_free(&s);
     return failed;
 }
