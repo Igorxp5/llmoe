@@ -17,7 +17,7 @@ to have validated args. Computation lives in header-only kernels under
   - `cpu_softmax.h`   — numerically stable row softmax
   - `cpu_topk.h`      — top-K desc with smallest-index tie-break
   - `cpu_rope.h`      — HF OlmoeRotaryEmbedding rotate_half RoPE (scalar)
-  - `cpu_sdpa.h`      — causal multi-head attention (scalar, malloc scores)
+  - `cpu_sdpa.h`      — causal multi-head attention (scalar; caller-owned score slices)
   - `cpu_silu.h`      — SiLU activation (scalar)
 
 ## Public API (`src/olmoe/engine/engine.h`)
@@ -47,6 +47,8 @@ typedef enum {
 typedef struct { /* every buffer is capacity seq_len along the seq dim */
     olmoe_act_t *hidden_in, *hidden_out;   /* [seq, hidden]     */
     olmoe_act_t *q, *k, *v, *ctx;          /* [seq, hidden]     */
+    olmoe_act_t *scores;                   /* [OLMOE_NUM_HEADS * max(seq_len, max_cache_len)]
+                                              per-head SDPA score slices */
     olmoe_act_t *router_logits;            /* [seq, n_experts]  */
     int         *topk_idx;                 /* [seq, K]          */
     olmoe_act_t *topk_w;                   /* [seq, K]          */

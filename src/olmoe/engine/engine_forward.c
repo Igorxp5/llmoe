@@ -39,11 +39,19 @@ olmoe_status_t olmoe_scratch_init(olmoe_scratch_t * restrict s,
     size_t r_cnt   = olmoe_engine_safe_array_size(seq_len, OLMOE_N_EXPERTS);
     size_t k_cnt   = olmoe_engine_safe_array_size(seq_len,
                                                    OLMOE_N_EXPERTS_PER_TOK);
-    size_t i_cnt   = olmoe_engine_safe_array_size(seq_len, OLMOE_INTER);
+    size_t i_cnt   = olmoe_engine_safe_array_size(seq_len,
+                                                   OLMOE_INTER);
     if (!h_cnt || !v_cnt || !r_cnt || !k_cnt || !i_cnt) {
         return OLMOE_ERR_SHAPE;
     }
-
+    /* SDPA scores: OLMOE_NUM_HEADS per-head slices of the largest token
+     * span any forward call can hit (prefill seq_len, decode cache_len). */
+    size_t s_cnt = olmoe_engine_safe_array_size(
+                       seq_len > max_cache_len ? seq_len : max_cache_len,
+                       OLMOE_NUM_HEADS);
+    if (!s_cnt) {
+        return OLMOE_ERR_SHAPE;
+    }
     s->hidden_in     = alloc_act_buffer(h_cnt);
     s->hidden_out    = alloc_act_buffer(h_cnt);
     s->q             = alloc_act_buffer(h_cnt);
@@ -56,9 +64,10 @@ olmoe_status_t olmoe_scratch_init(olmoe_scratch_t * restrict s,
     s->expert_out    = alloc_act_buffer(h_cnt);
     s->logits        = alloc_act_buffer(v_cnt);
     s->topk_idx      = (int *)malloc(k_cnt * sizeof(int));
+    s->scores        = alloc_act_buffer(s_cnt);
     if (!s->hidden_in || !s->hidden_out || !s->q || !s->k || !s->v ||
         !s->ctx || !s->router_logits || !s->topk_w || !s->expert_in ||
-        !s->expert_out || !s->logits || !s->topk_idx) {
+        !s->expert_out || !s->logits || !s->topk_idx || !s->scores) {
         olmoe_scratch_free(s);
         return OLMOE_ERR_ALLOC;
     }
@@ -100,6 +109,7 @@ void olmoe_scratch_free(olmoe_scratch_t * restrict s)
     free(s->expert_in);
     free(s->expert_out);
     free(s->logits);
+    free(s->scores);
     free(s->cache_k);
     free(s->cache_v);
     memset(s, 0, sizeof *s);
@@ -167,11 +177,12 @@ static void attention_block(const olmoe_layer_t * restrict L,
                              s->cache_k + layer_offset,
                              s->cache_v + layer_offset,
                              seq, pos, OLMOE_NUM_HEADS,
-                             OLMOE_HEAD_DIM, scale);
+                             OLMOE_HEAD_DIM, scale,
+                             s->scores, pos + seq);
     } else {
         /* First call (prefill, no history): full causal SDPA. */
         cpu_sdpa(s->ctx, s->q, s->k, s->v, seq, OLMOE_NUM_HEADS,
-                 OLMOE_HEAD_DIM, scale);
+                 OLMOE_HEAD_DIM, scale, s->scores, seq);
     }
     olmoe_o_proj_forward(&L->self_attn, s->ctx, seq, out);
     add_residual(out, x, seq * (size_t)OLMOE_HIDDEN);

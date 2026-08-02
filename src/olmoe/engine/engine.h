@@ -40,7 +40,9 @@ typedef enum {
  *
  * Every member is capacity `seq_len` (the value passed to init) along the
  * sequence dimension; the hidden/inter/vocab extents are the baked
- * OLMOE_* constants.
+ * OLMOE_* constants. `scores` is the exception: OLMOE_NUM_HEADS per-head
+ * SDPA score slices of `max(seq_len, max_cache_len)` each, sized to cover
+ * both the full-SDPA (prefill) and incremental (decode) paths.
  *
  * When `max_cache_len > 0` the engine also allocates per-layer K/V caches
  * dimensioned [max_cache_len, OLMOE_HIDDEN] so that incremental decode
@@ -52,6 +54,8 @@ typedef struct {
     olmoe_act_t *k;             /* [seq, OLMOE_HIDDEN]                */
     olmoe_act_t *v;             /* [seq, OLMOE_HIDDEN]                */
     olmoe_act_t *ctx;           /* [seq, OLMOE_HIDDEN]  attn output    */
+    olmoe_act_t *scores;        /* [OLMOE_NUM_HEADS * max(seq_len, max_cache_len)]
+                                   per-head SDPA score slices (no per-call malloc) */
     olmoe_act_t *router_logits; /* [seq, OLMOE_N_EXPERTS]             */
     int         *topk_idx;      /* [seq, OLMOE_N_EXPERTS_PER_TOK]     */
     olmoe_act_t *topk_w;        /* [seq, OLMOE_N_EXPERTS_PER_TOK]     */
