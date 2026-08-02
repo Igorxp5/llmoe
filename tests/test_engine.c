@@ -6,6 +6,7 @@
 
 #include "test_engine.h"
 
+/* Forward declarations for the module dispatchers this file aggregates. */
 int test_engine_matmul_pass(void);
 int test_engine_norm_pass(void);
 int test_engine_mlp_pass(void);
@@ -13,6 +14,54 @@ int test_engine_fwd_pass(void);
 int test_engine_argmax_pass(void);
 
 /* ---------- checks ------------------------------------------------------ */
+
+/* The per-kind leaf forwards write `seq_len` rows and are documented for
+ * seq_len >= 1. A zero-length sequence must therefore be a no-op: dense
+ * sentinel arrays must emerge untouched. The two model-backed forwards
+ * (embed, lm_head) are excluded — embed needs a real model and lm_head
+ * indexes row (seq_len-1), overflow for zero. NULL pointers are not part of
+ * the void-return contract, so only the shape guard is asserted. */
+static int test_leaf_forwards_zero_seq_no_op(void)
+{
+    static olmoe_self_attn_t attn;
+    static olmoe_expert_t expert;
+    enum { N = 512 };
+    olmoe_bf16_t w[OLMOE_HIDDEN];
+    olmoe_act_t x[N], out[N];
+    int topk_idx[OLMOE_N_EXPERTS_PER_TOK];
+    olmoe_act_t topk_w[OLMOE_N_EXPERTS_PER_TOK];
+    const float sentinel = 987.654f;
+    /* The weight buffer is never read (seq_len is 0), but zero it so GCC's
+     * maybe-uninitialized analysis stays quiet. */
+    memset(w, 0, sizeof w);
+    for (size_t i = 0; i < N; ++i) { x[i] = 1.0f; out[i] = sentinel; }
+
+    int failed = 0;
+    /* RMSNorm forwards (out-of-place and in-place variants). */
+    olmoe_input_ln_forward(w, x, 0, out);
+    olmoe_final_norm_forward(w, x, 0, out);
+    olmoe_post_ln_forward(w, x, 0, out);
+    if (out[0] != sentinel) { printf("FAIL: norm seq=0 wrote output\n"); ++failed; }
+    olmoe_q_norm_forward(w, x, 0);
+    olmoe_k_norm_forward(w, x, 0);
+    if (x[0] != 1.0f) { printf("FAIL: q/k_norm seq=0 wrote input\n"); ++failed; }
+
+    /* Attention projections. */
+    olmoe_q_proj_forward(&attn, x, 0, out);
+    olmoe_k_proj_forward(&attn, x, 0, out);
+    olmoe_v_proj_forward(&attn, x, 0, out);
+    olmoe_o_proj_forward(&attn, x, 0, out);
+
+    /* MoE router + expert matmuls. */
+    olmoe_mlp_gate_forward(w, x, 0, topk_idx, topk_w);
+    olmoe_expert_gate_forward(&expert, x, 0, out);
+    olmoe_expert_up_forward(&expert, x, 0, out);
+    olmoe_expert_down_forward(&expert, x, 0, out);
+
+    if (out[0] != sentinel) { printf("FAIL: a leaf forward seq=0 wrote output\n"); ++failed; }
+    if (!failed) printf("PASS: leaf forwards seq_len=0 are no-ops\n");
+    return failed;
+}
 
 /* init + free must roundtrip without leaking or crashing for a typical
  * short sequence. */
@@ -127,6 +176,7 @@ int test_engine_stubs_pass(void)
     failed += test_scratch_init_free_roundtrip();
     failed += test_scratch_init_null_returns_err();
     failed += test_scratch_free_null_is_safe();
+    failed += test_leaf_forwards_zero_seq_no_op();
     failed += test_forward_zero_seq_returns_ok();
     failed += test_forward_oversize_seq_returns_shape();
     failed += test_engine_matmul_pass();

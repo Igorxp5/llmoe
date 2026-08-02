@@ -34,14 +34,26 @@ import re
 import struct
 import sys
 
-# Tensor name prefix for oracles is sorted-by-name within a shard; per AGENTS
-# "no diagnostic scratch files in the tree" we keep oracle names here.
+# Tensor name prefix for oracles is sorted by name within a file; per AGENTS
+# "no diagnostic scratch files in the tree" we keep oracle names here. These
+# named samples cover the top-level tensors (vocab-wide embed + lm_head are
+# too big to bake in full; a leading slice is what the value tests compare).
 ORACLE_SAMPLES = [
     ("MODEL_NORM",          "model.norm.weight"),
-    ("LM_HEAD",            "lm_head.weight"),
-    ("EXPERT0_DOWN",       "model.layers.0.mlp.experts.0.down_proj.weight"),
+    ("MODEL_EMBED",         "model.embed_tokens.weight"),
+    ("LM_HEAD",             "lm_head.weight"),
 ]
-ORACLE_N_VALUES = 16
+ORACLE_N_VALUES = 25
+
+# Every layer-scoped, non-expert tensor kind maps to how its tensor name is
+# spelled for a given layer. Indexed by OLMOE_N_LAYERS for the value tests.
+LAYER_ORACLE_KINDS = ["INPUT_LN", "POST_LN", "Q_PROJ", "K_PROJ", "V_PROJ",
+                      "O_PROJ", "Q_NORM", "K_NORM", "MLP_GATE"]
+
+# Expert projections map a (layer, expert) pair to their tensor name.
+EXPERT_ORACLE_KINDS = {"EXPERT_GATE": "gate_proj",
+                       "EXPERT_UP": "up_proj",
+                       "EXPERT_DOWN": "down_proj"}
 
 KIND_ORDER = [
     "EMBED", "LM_HEAD", "NORM",
@@ -158,6 +170,21 @@ def emit(out, s):
     out.write(s)
 
 
+def _layer_kind_name(kind, L):
+    base = f"model.layers.{L}"
+    return {
+        "INPUT_LN": f"{base}.input_layernorm.weight",
+        "POST_LN":  f"{base}.post_attention_layernorm.weight",
+        "Q_PROJ":   f"{base}.self_attn.q_proj.weight",
+        "K_PROJ":   f"{base}.self_attn.k_proj.weight",
+        "V_PROJ":   f"{base}.self_attn.v_proj.weight",
+        "O_PROJ":   f"{base}.self_attn.o_proj.weight",
+        "Q_NORM":   f"{base}.self_attn.q_norm.weight",
+        "K_NORM":   f"{base}.self_attn.k_norm.weight",
+        "MLP_GATE": f"{base}.mlp.gate.weight",
+    }[kind]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("index", help="Path to model.safetensors.index.json")
@@ -225,15 +252,33 @@ def main():
     total_tensors = sum(len(shard_items[sh]) for sh in shards)
 
     # Oracle samples: read raw BF16 uint16 for the first N values of each.
-    oracles = []
-    for label, name in ORACLE_SAMPLES:
+    def oracle_for(name):
         sh = weight_map[name]
         info = shard_header[sh][name]
-        vals = read_bf16_uint16(
-            os.path.join(base, sh),
-            shard_hsize[sh], info["data_offsets"][0], ORACLE_N_VALUES,
+        return read_bf16_uint16(
+            os.path.join(base, sh), shard_hsize[sh], info["data_offsets"][0],
+            ORACLE_N_VALUES,
         )
-        oracles.append((label, vals))
+
+    oracles = [(label, oracle_for(name)) for label, name in ORACLE_SAMPLES]
+
+    # Per-layer oracle tables for every layer-scoped non-expert kind, and
+    # per-expert tables for every expert projection. These let the loader
+    # tests memcmp real values instead of only asserting "not zero".
+    n_layers, n_experts = dims["n_layers"], dims["n_experts"]
+    layer_oracles = {
+        kind: [oracle_for(_layer_kind_name(kind, L)) for L in range(n_layers)]
+        for kind in LAYER_ORACLE_KINDS
+    }
+    expert_oracles = {}
+    for kind, proj in EXPERT_ORACLE_KINDS.items():
+        layer_rows = []
+        for L in range(n_layers):
+            layer_rows.append([
+                oracle_for(f"model.layers.{L}.mlp.experts.{E}.{proj}.weight")
+                for E in range(n_experts)
+            ])
+        expert_oracles[kind] = layer_rows
 
     # Emit the .inc.
     with open(args.output, "w") as out:
@@ -241,7 +286,7 @@ def main():
         emit_enum(out)
         emit_struct(out)
         emit_shard_arrays(out, shards, shard_items)
-        emit_oracles(out, oracles)
+        emit_oracles(out, oracles, layer_oracles, expert_oracles)
 
     print(
         f"generate_model_layout.py: wrote {args.output} "
@@ -320,19 +365,50 @@ def emit_shard_arrays(out, shards, shard_items):
     emit(out, "};\n\n")
 
 
-def emit_oracles(out, oracles):
-    emit(out, "/* Raw BF16 uint16 oracle samples for the first\n")
-    emit(out, f" * {ORACLE_N_VALUES} values of selected tensors. Tests memcmp\n")
-    emit(out, " * these against the loaded model's pointers. Cross-checked\n")
-    emit(out, " * during dev with `scripts/inspect_safetensors.py --dump-values`. */\n")
+def _emit_values(out, vals):
+    for i, v in enumerate(vals):
+        emit(out, f"0x{v:04x}")
+        if i < len(vals) - 1:
+            emit(out, ", " if (i + 1) % 8 else ",\n    ")
+
+
+def emit_oracles(out, oracles, layer_oracles, expert_oracles):
+    emit(out, "/* Raw BF16 uint16 oracle samples compare the loaded model's\n")
+    emit(out, f" * first {ORACLE_N_VALUES} values per tensor against these. The\n")
+    emit(out, " * loader tests memcmp the loaded buffers to these tables rather\n")
+    emit(out, " * than only asserting the data is non-zero. Cross-checked during\n")
+    emit(out, " * dev with `scripts/inspect_safetensors.py --dump-values`. */\n")
     for label, vals in oracles:
         emit(out, f"static const uint16_t "
                    f"OLMOE_ORACLE_{label}[OLMOE_ORACLE_N_VALUES] = {{\n    ")
-        for i, v in enumerate(vals):
-            emit(out, f"0x{v:04x}")
-            if i < len(vals) - 1:
-                emit(out, ", " if (i + 1) % 8 else ",\n    ")
+        _emit_values(out, vals)
         emit(out, "\n};\n\n")
+
+    emit(out, "/* Per-layer oracle for every layer-scoped tensor kind,\n")
+    emit(out, f" * indexed [layer][{ORACLE_N_VALUES}]. */\n")
+    for kind in LAYER_ORACLE_KINDS:
+        emit(out, f"static const uint16_t OLMOE_ORACLE_{kind}"
+                   f"[OLMOE_N_LAYERS][OLMOE_ORACLE_N_VALUES] = {{\n")
+        for L, vals in enumerate(layer_oracles[kind]):
+            emit(out, f"    /* layer {L} */ {{ ")
+            _emit_values(out, vals)
+            emit(out, " },\n")
+        emit(out, "};\n\n")
+
+    emit(out, "/* Per-expert oracle for every expert projection, indexed\n")
+    emit(out, f" * [layer][expert][{ORACLE_N_VALUES}]. */\n")
+    for kind in EXPERT_ORACLE_KINDS:
+        emit(out, f"static const uint16_t OLMOE_ORACLE_{kind}"
+                   f"[OLMOE_N_LAYERS][OLMOE_N_EXPERTS]"
+                   f"[OLMOE_ORACLE_N_VALUES] = {{\n")
+        for L, layer_row in enumerate(expert_oracles[kind]):
+            emit(out, f"    /* layer {L} */ {{\n")
+            for E, vals in enumerate(layer_row):
+                emit(out, "        /* expert %d */ { " % E)
+                _emit_values(out, vals)
+                emit(out, " },\n")
+            emit(out, "    },\n")
+        emit(out, "};\n\n")
     emit(out, "#endif /* OLMOE_MODEL_LAYOUT_INC */\n")
 
 

@@ -24,10 +24,10 @@ static int check_matmul_kernel_small_dim(void)
     return lanes_match(got, want, (size_t)M * N);
 }
 
-static int test_lm_head_matmul_matches_scalar(void)
+static int test_matmul_kernel_matches_scalar(void)
 {
     int failed = check_matmul_kernel_small_dim();
-    if (!failed) printf("PASS: lm_head matmul matches scalar\n");
+    if (!failed) printf("PASS: cpu_matmul_bf16 small dim matches scalar\n");
     return failed;
 }
 
@@ -155,7 +155,7 @@ static int test_o_proj_matmul_matches_scalar(void)
 int test_engine_matmul_pass(void)
 {
     int failed = 0;
-    failed += test_lm_head_matmul_matches_scalar();
+    failed += test_matmul_kernel_matches_scalar();
     failed += test_q_proj_matmul_matches_scalar();
     failed += test_k_proj_matmul_matches_scalar();
     failed += test_v_proj_matmul_matches_scalar();

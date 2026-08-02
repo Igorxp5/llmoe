@@ -7,5 +7,12 @@ int test_oracle_cases_match_expected_ids(void);
 int test_null_input_returns_zero(void);
 int test_empty_input_preserves_out_buffer(void);
 int test_overflow_probe_reports_full_count(void);
+int test_oversized_cap_writes_within_cap(void);
+int test_decode_null_ids_returns_zero(void);
+int test_decode_empty_list_returns_zero(void);
+int test_decode_probe_length_and_fill(void);
+int test_decode_roundtrip_plaintext(void);
+int test_decode_exact_cap_fills_buffer(void);
+int test_decode_truncated_cap_reports_full(void);
 
 #endif /* OLMOE_TEST_TOKENIZER_H */

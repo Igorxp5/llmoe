@@ -6,6 +6,7 @@
 #include "olmoe/engine/engine.h"
 #include "olmoe/layers/layers.h"
 
+#include "test_engine_helpers.h"
 #include "test_layer.h"
 
 #ifndef OLMOE_TEST_MODEL_DIR
@@ -14,102 +15,87 @@
 
 /* ---------- checks ------------------------------------------------------ */
 
-/* Verify the loader actually wrote data into each weight buffer by sampling
- * the first BF16 element. With the model now being a single calloc'd block,
- * zero-initialized at load time, a zero byte at index 0 means the loader
- * never reached that field (layout mismatch, truncated shard, etc.). */
-static int test_top_level_tensors_nonzero(const olmoe_model_t *m)
+/* Compare `dst` (a loaded weight buffer) against an oracle row of the first
+ * OLMOE_ORACLE_N_VALUES BF16 values. Reports one FAIL line per mismatch. */
+static int memcmp_oracle_row(const void *dst, const uint16_t *oracle,
+                             const char *what, int L, int E)
 {
-    int failed = 0;
-    if (m->embed_tokens[0] == 0) { printf("FAIL: embed_tokens zero\n"); ++failed; }
-    if (m->lm_head[0] == 0)       { printf("FAIL: lm_head zero\n");       ++failed; }
-    if (m->norm[0] == 0)          { printf("FAIL: norm zero\n");          ++failed; }
-    if (!failed)
-        printf("PASS: top-level tensors written by loader\n");
-    return failed;
+    if (memcmp(dst, oracle, OLMOE_ORACLE_N_VALUES * sizeof(uint16_t)) != 0) {
+        if (E >= 0)
+            printf("FAIL: %s layer %d expert %d first %d values != oracle\n",
+                   what, L, E, OLMOE_ORACLE_N_VALUES);
+        else
+            printf("FAIL: %s layer %d first %d values != oracle\n",
+                   what, L, OLMOE_ORACLE_N_VALUES);
+        return 1;
+    }
+    return 0;
 }
 
-static int test_self_attn_nonzero_for_layer(const olmoe_model_t *m, int L)
-{
-    const olmoe_self_attn_t *sa = &m->layers[L].self_attn;
-    int failed = 0;
-    if (sa->q_proj[0] == 0) { printf("FAIL: layer %d q_proj zero\n", L); ++failed; }
-    if (sa->k_proj[0] == 0) { printf("FAIL: layer %d k_proj zero\n", L); ++failed; }
-    if (sa->v_proj[0] == 0) { printf("FAIL: layer %d v_proj zero\n", L); ++failed; }
-    if (sa->o_proj[0] == 0) { printf("FAIL: layer %d o_proj zero\n", L); ++failed; }
-    if (sa->q_norm[0] == 0) { printf("FAIL: layer %d q_norm zero\n", L); ++failed; }
-    if (sa->k_norm[0] == 0) { printf("FAIL: layer %d k_norm zero\n", L); ++failed; }
-    return failed;
-}
-
-static int test_every_layer_self_attn_nonzero(const olmoe_model_t *m)
-{
-    int failed = 0;
-    for (int L = 0; L < OLMOE_N_LAYERS; ++L)
-        failed += test_self_attn_nonzero_for_layer(m, L);
-    if (!failed)
-        printf("PASS: all %d layers' self_attn tensors written by loader\n",
-               OLMOE_N_LAYERS);
-    return failed;
-}
-
-static int test_every_layer_layernorms_nonzero(const olmoe_model_t *m)
+/* Every layer-scoped weight buffer must reproduce its per-layer oracle table
+ * at the leading values. This replaces the old "is it nonzero" probe: the
+ * loader is expected to fill these buffers with exact BF16 bytes, so a real
+ * value comparison, not a zero check, validates the load. */
+static int test_every_layer_tensors_match_oracle(const olmoe_model_t *m)
 {
     int failed = 0;
     for (int L = 0; L < OLMOE_N_LAYERS; ++L) {
-        if (m->layers[L].input_layernorm[0] == 0) {
-            printf("FAIL: layer %d input_layernorm zero\n", L); ++failed;
-        }
-        if (m->layers[L].post_attention_layernorm[0] == 0) {
-            printf("FAIL: layer %d post_attention_layernorm zero\n", L); ++failed;
-        }
+        const olmoe_self_attn_t *sa = &m->layers[L].self_attn;
+        failed += memcmp_oracle_row(sa->q_proj, OLMOE_ORACLE_Q_PROJ[L],
+                                    "q_proj", L, -1);
+        failed += memcmp_oracle_row(sa->k_proj, OLMOE_ORACLE_K_PROJ[L],
+                                    "k_proj", L, -1);
+        failed += memcmp_oracle_row(sa->v_proj, OLMOE_ORACLE_V_PROJ[L],
+                                    "v_proj", L, -1);
+        failed += memcmp_oracle_row(sa->o_proj, OLMOE_ORACLE_O_PROJ[L],
+                                    "o_proj", L, -1);
+        failed += memcmp_oracle_row(sa->q_norm, OLMOE_ORACLE_Q_NORM[L],
+                                    "q_norm", L, -1);
+        failed += memcmp_oracle_row(sa->k_norm, OLMOE_ORACLE_K_NORM[L],
+                                    "k_norm", L, -1);
+        failed += memcmp_oracle_row(m->layers[L].input_layernorm,
+                                    OLMOE_ORACLE_INPUT_LN[L],
+                                    "input_layernorm", L, -1);
+        failed += memcmp_oracle_row(m->layers[L].post_attention_layernorm,
+                                    OLMOE_ORACLE_POST_LN[L],
+                                    "post_attention_layernorm", L, -1);
+        failed += memcmp_oracle_row(m->layers[L].mlp_gate,
+                                    OLMOE_ORACLE_MLP_GATE[L],
+                                    "mlp_gate", L, -1);
     }
     if (!failed)
-        printf("PASS: all %d layers' layernorms written by loader\n",
+        printf("PASS: all %d layers' weights match per-layer oracle\n",
                OLMOE_N_LAYERS);
     return failed;
 }
 
-static int test_every_layer_mlp_gate_nonzero(const olmoe_model_t *m)
-{
-    int failed = 0;
-    for (int L = 0; L < OLMOE_N_LAYERS; ++L) {
-        if (m->layers[L].mlp_gate[0] == 0) {
-            printf("FAIL: layer %d mlp_gate (router) zero\n", L); ++failed;
-        }
-    }
-    if (!failed)
-        printf("PASS: all %d layers' mlp_gate (router) written by loader\n",
-               OLMOE_N_LAYERS);
-    return failed;
-}
-
-/* 16 layers * 64 experts * 3 weights = 3072 expert buffers. Report only
- * failures so a green run stays a single line. */
-static int test_every_expert_tensor_nonzero(const olmoe_model_t *m)
+/* Every expert projection buffer is checked against its own oracle table:
+ * 16 layers x 64 experts x 3 weights, all compared to the real BF16 values.
+ * Replaces the predecessor test that confirmed only "nonzero". */
+static int test_every_expert_tensor_matches_oracle(const olmoe_model_t *m)
 {
     int failed = 0;
     for (int L = 0; L < OLMOE_N_LAYERS; ++L) {
         for (int E = 0; E < OLMOE_N_EXPERTS; ++E) {
             const olmoe_expert_t *ex = &m->layers[L].experts[E];
-            if (ex->gate_proj[0] == 0) {
-                printf("FAIL: layer %d expert %d gate_proj zero\n", L, E); ++failed;
-            }
-            if (ex->up_proj[0] == 0) {
-                printf("FAIL: layer %d expert %d up_proj zero\n", L, E); ++failed;
-            }
-            if (ex->down_proj[0] == 0) {
-                printf("FAIL: layer %d expert %d down_proj zero\n", L, E); ++failed;
-            }
+            failed += memcmp_oracle_row(ex->gate_proj,
+                                        OLMOE_ORACLE_EXPERT_GATE[L][E],
+                                        "expert gate_proj", L, E);
+            failed += memcmp_oracle_row(ex->up_proj,
+                                        OLMOE_ORACLE_EXPERT_UP[L][E],
+                                        "expert up_proj", L, E);
+            failed += memcmp_oracle_row(ex->down_proj,
+                                        OLMOE_ORACLE_EXPERT_DOWN[L][E],
+                                        "expert down_proj", L, E);
         }
     }
     if (!failed)
-        printf("PASS: all %d layers x %d experts x 3 weights written by loader\n",
+        printf("PASS: all %d layers x %d experts x 3 weights match oracle\n",
                OLMOE_N_LAYERS, OLMOE_N_EXPERTS);
     return failed;
 }
 
-static int test_norm_first_values_match_oracle(const olmoe_model_t *m)
+static int test_norm_first_matches_oracle(const olmoe_model_t *m)
 {
     if (memcmp(m->norm, OLMOE_ORACLE_MODEL_NORM,
                sizeof OLMOE_ORACLE_MODEL_NORM) != 0) {
@@ -121,7 +107,7 @@ static int test_norm_first_values_match_oracle(const olmoe_model_t *m)
     return 0;
 }
 
-static int test_lm_head_first_values_match_oracle(const olmoe_model_t *m)
+static int test_lm_head_first_matches_oracle(const olmoe_model_t *m)
 {
     if (memcmp(m->lm_head, OLMOE_ORACLE_LM_HEAD,
                sizeof OLMOE_ORACLE_LM_HEAD) != 0) {
@@ -133,17 +119,15 @@ static int test_lm_head_first_values_match_oracle(const olmoe_model_t *m)
     return 0;
 }
 
-static int test_expert_zero_down_values_match_oracle(const olmoe_model_t *m)
+static int test_embed_first_values_match_oracle(const olmoe_model_t *m)
 {
-    const olmoe_bf16_t *p = m->layers[0].experts[0].down_proj;
-    if (memcmp(p, OLMOE_ORACLE_EXPERT0_DOWN,
-               sizeof OLMOE_ORACLE_EXPERT0_DOWN) != 0) {
-        printf("FAIL: layers[0].experts[0].down_proj first N values "
-               "!= baked oracle\n");
+    if (memcmp(m->embed_tokens, OLMOE_ORACLE_MODEL_EMBED,
+               sizeof OLMOE_ORACLE_MODEL_EMBED) != 0) {
+        printf("FAIL: model.embed_tokens.weight first N values != oracle\n");
         return 1;
     }
-    printf("PASS: layers[0].experts[0].down_proj first %d BF16 values "
-           "match oracle\n", OLMOE_ORACLE_N_VALUES);
+    printf("PASS: model.embed_tokens.weight first %d BF16 values match oracle\n",
+           OLMOE_ORACLE_N_VALUES);
     return 0;
 }
 
@@ -295,6 +279,54 @@ static int test_forward_end_to_end_sane(const olmoe_model_t *m)
     return failed;
 }
 
+/* olmoe_lm_head_forward: real-dim call against the loaded head on a 2-row
+ * input. It must compute only the last (seq_len-1) row into logits_out and
+ * leave earlier rows untouched; the last row is compared to the scalar BF16
+ * reference over all OLMOE_VOCAB lanes. */
+static int test_lm_head_forward_matches_scalar(const olmoe_model_t *m)
+{
+    enum { SEQ = 2 };
+    const size_t V = (size_t)OLMOE_VOCAB, H = (size_t)OLMOE_HIDDEN;
+    olmoe_act_t *x = malloc(SEQ * H * sizeof *x);
+    olmoe_act_t *got = malloc(SEQ * V * sizeof *got);
+    if (!x || !got) {
+        printf("FAIL: lm_head malloc OOM\n");
+        free(x); free(got);
+        return 1;
+    }
+for (size_t i = 0; i < SEQ * H; ++i)
+        x[i] = (float)(int)(i % 7) / 100.0f - 0.03f;
+    const float sentinel = 123.456f;
+    for (size_t i = 0; i < SEQ * V; ++i) got[i] = sentinel;
+
+    olmoe_lm_head_forward(m, x, SEQ, got);
+
+    int failed = 0;
+    /* Earlier row must be untouched. */
+    for (size_t j = 0; j < V; ++j) {
+        if (got[j] != sentinel) {
+            printf("FAIL: lm_head wrote into row 0 at lane %zu\n", j);
+            failed = 1;
+            break;
+        }
+    }
+    /* Last row matches scalar dot product. */
+    for (size_t j = 0; j < V && !failed; ++j) {
+        float want = scalar_dot_bf16(x + (SEQ - 1) * H, m->lm_head + j * H, H);
+        float d = fabsf(got[(SEQ - 1) * V + j] - want);
+        if (d > 1e-5f && d > 1e-4f * fabsf(want)) {
+            printf("FAIL: lm_head lane %zu got=%.6f want=%.6f\n",
+                   j, got[(SEQ - 1) * V + j], want);
+            ++failed;
+            if (failed == 8) break;
+        }
+    }
+    free(x); free(got);
+    if (!failed)
+        printf("PASS: lm_head_forward computes last-row logits vs scalar\n");
+    return failed;
+}
+
 /* ---------- dispatcher -------------------------------------------------- */
 
 static const char *resolve_model_dir(void)
@@ -319,15 +351,13 @@ int test_layer_loads_and_validates(void)
     }
 
     int failed = 0;
-    failed += test_top_level_tensors_nonzero(m);
-    failed += test_every_layer_self_attn_nonzero(m);
-    failed += test_every_layer_layernorms_nonzero(m);
-    failed += test_every_layer_mlp_gate_nonzero(m);
-    failed += test_every_expert_tensor_nonzero(m);
-    failed += test_norm_first_values_match_oracle(m);
-    failed += test_lm_head_first_values_match_oracle(m);
-    failed += test_expert_zero_down_values_match_oracle(m);
+    failed += test_embed_first_values_match_oracle(m);
+    failed += test_norm_first_matches_oracle(m);
+    failed += test_lm_head_first_matches_oracle(m);
+    failed += test_every_layer_tensors_match_oracle(m);
+    failed += test_every_expert_tensor_matches_oracle(m);
     failed += test_embed_lookup_matches_oracle(m);
+    failed += test_lm_head_forward_matches_scalar(m);
     failed += test_forward_end_to_end_sane(m);
 
     olmoe_model_free(m);
