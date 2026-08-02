@@ -62,3 +62,18 @@ The MoE block now has two parallelization shapes:
   fold serially into that token's own row (disjoint across threads).
 
 Keeps 8-way decode parallelism while removing the cross-thread RMW.
+
+## Later evolution
+
+`63f0067 perf(engine): parallelize MoE decode over (slot × row) space`
+replaced the 8-thread slot-parallel decode with `moe_block_decode`
+(`src/olmoe/engine/engine_forward.c`). It decouples expert *compute*
+from the *accumulate*: the parallel space spans (slot × output-row)
+instead of the 8 slots alone, lifting the previous 8-thread cap. Each
+slot folds its gate/up/act/down into private per-slot arrays (disjoint
+writers), and a separate fold pass sums `down_all[r] * topk_w[r]` into
+`expert_out` in ascending `r` order. As before, every phase writes
+disjoint elements, so the cross-thread RMW this document describes
+cannot recur, and the fixed fold order keeps the result bit-reproducible.
+Prefill (`moe_block_prefill`) is unchanged: one token per iteration, the
+token's 8 slots folded serially into its own disjoint row.

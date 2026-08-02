@@ -68,6 +68,10 @@ loader `fread`s shard bytes directly into the right field offset. There
 are no individual `malloc`s or per-tensor ownership tables.
 `olmoe_model_free(model)` does a single `free(model)` (NULL-safe).
 
+On successful load the loader calls `mlock(model, sizeof *model)` so the
+~13 GiB of weight pages are pinned in RAM and cannot be swapped out;
+`olmoe_model_free` reverses this with `munlock` before `free`.
+
 ## Loading flow
 
 Per shard (`src/olmoe/layers/layers.c`):
