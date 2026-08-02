@@ -54,6 +54,7 @@ OLMoE inference engine written in C.
 ## Commits
 
 - Use Conventional Commit message style when you've been requested to commit
+- **When committing new benchmark results, update `README.md` in the same commit.** `benchmarks/benchmark.sh` appends one row per run to `benchmarks/metrics.csv`. After recording a new batch of runs for a commit, compute the average of that commit's `tk_s` values and update the "Last benchmark result" table in `README.md` (commit short-hash, average `tok/s` rounded to 2 decimals, and the number of runs averaged). Never leave the README table pointing at an older commit when newer results are committed.
 
 ## Documentation and Progress storage
 
