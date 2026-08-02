@@ -6,15 +6,75 @@ set -euo pipefail
 # $GOLDEN, otherwise the run fails instead of recording a metric. Re-baseline
 # with `BENCH_REGEN=1` (or by deleting $GOLDEN) after a legitimately expected
 # change in model output (e.g. a correctness fix).
+#
+# Each row in $CSV records the commit, tokens/s and the host's static hardware
+# fingerprint (backend, CPU name, cores/threads, RAM). All values except
+# RAM speed and slot count are read from /proc without privileges; pass
+# `--sudo-hw` to also read those two via `sudo dmidecode` (root), otherwise
+# they are left empty.
 
-MODEL="${1:-models/OLMoE-1B-7B-0924-Instruct/}"
-CSV="${2:-metrics.csv}"
-GOLDEN="${3:-benchmark.expected.txt}"
 TIMEOUT_SEC=60
-HEADER="commit,tk/s"
 PROMPT="The number of planets in the Solar System is: "
+BACKEND="CPU"
+
+# Parse --sudo-hw first; the remaining positional args are MODEL CSV GOLDEN.
+SUDO_HW=0
+POSITIONAL=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --sudo-hw) SUDO_HW=1; shift ;;
+        *) POSITIONAL+=("$1"); shift ;;
+    esac
+done
+
+MODEL="${POSITIONAL[0]:-models/OLMoE-1B-7B-0924-Instruct/}"
+CSV="${POSITIONAL[1]:-benchmarks/metrics.csv}"
+GOLDEN="${POSITIONAL[2]:-benchmarks/benchmark.expected.txt}"
+
+# ── Static hardware fingerprint (same machine for every historical run) ─────
+detect_cpu_name() {
+    awk -F': ' '/^model name/{print $2; exit}' /proc/cpuinfo
+}
+
+detect_cores_threads() {
+    # e.g. "12c/24t": physical cores and logical threads from /proc/cpuinfo.
+    local cores threads
+    cores=$(awk '/^cpu cores/{print $4; exit}' /proc/cpuinfo)
+    threads=$(awk '/^siblings/{print $3; exit}' /proc/cpuinfo)
+    echo "${cores}c/${threads}t"
+}
+
+detect_ram_mb() {
+    # MemTotal is in KiB; report in MB (rounded) like `free -m`.
+    local kb
+    kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+    echo "$(( (kb + 512) / 1024 ))"
+}
+
+fetch_hw() {
+    # RAM speed and slot count live in SMBIOS and need root; best-effort only.
+    local dmi
+    if [ "$SUDO_HW" -ne 1 ]; then
+        return
+    fi
+    if ! dmi=$(sudo dmidecode --type memory 2>/dev/null); then
+        echo "[warn] sudo dmidecode failed; ram_speed/ram_slots left empty" >&2
+        return
+    fi
+    ram_speed=$(echo "$dmi" | grep -oE '[[:space:]]Speed: [0-9]+ MT/s' | head -1 |
+        sed -E 's/.*Speed: ([0-9]+) MT\/s/\1/')
+    ram_slots=$(echo "$dmi" | grep -c 'Form Factor:')
+}
+
+CPU_NAME=$(detect_cpu_name)
+CPU_CORES_THREADS=$(detect_cores_threads)
+RAM_MB=$(detect_ram_mb)
+RAM_SPEED=""
+RAM_SLOTS=""
+fetch_hw
 
 COMMIT=$(git rev-parse --short HEAD)
+HEADER="commit,tk_s,backend,cpu_name,cpu_cores_threads,ram_mb,ram_speed_mts,ram_slots"
 
 out=$(mktemp)
 err=$(mktemp)
@@ -53,5 +113,6 @@ if [ ! -s "$CSV" ]; then
     echo "$HEADER" > "$CSV"
 fi
 
-echo "$COMMIT,$tk_s" >> "$CSV"
-echo "Wrote to $CSV: $COMMIT,$tk_s"
+row="$COMMIT,$tk_s,$BACKEND,$CPU_NAME,$CPU_CORES_THREADS,$RAM_MB,$RAM_SPEED,$RAM_SLOTS"
+echo "$row" >> "$CSV"
+echo "Wrote to $CSV: $row"
