@@ -111,8 +111,20 @@ void olmoe_scratch_free(olmoe_scratch_t * restrict s)
 static inline void add_residual(olmoe_act_t * restrict out,
                          const olmoe_act_t * restrict x, size_t n)
 {
+    /* Mask every 16-lane block rather than splitting a full-width fast path
+     * from a masked tail: GCC miscompiles the branchy form (a `lanes == 16`
+     * __builtin_expect branch inside the OpenMP stepped loop produced
+     * wrong results for n >= 100, first-bad 25a8615, found via git bisect
+     * against benchmark.expected.txt). Branchless masking is correct for all
+     * n and every thread count. */
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < n; ++i) out[i] += x[i];
+    for (size_t i = 0; i < n; i += 16) {
+        size_t lanes = n - i; if (lanes > 16) lanes = 16;
+        __mmask16 mask = (__mmask16)((1u << lanes) - 1);
+        __m512 xv = _mm512_mask_loadu_ps(_mm512_setzero_ps(), mask, x + i);
+        __m512 ov = _mm512_mask_loadu_ps(_mm512_setzero_ps(), mask, out + i);
+        _mm512_mask_storeu_ps(out + i, mask, _mm512_add_ps(ov, xv));
+    }
 }
 
 /* Attention block with KV-cache support.  When s->cache_len > 0 the
