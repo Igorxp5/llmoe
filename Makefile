@@ -1,5 +1,5 @@
 CC       = gcc
-CFLAGS   = -D_POSIX_C_SOURCE=200112L \
+CFLAGS   = -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE \
            -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
            -Wno-type-limits -Wno-unused-function \
            -fPIC -ffunction-sections -fdata-sections \

@@ -186,6 +186,15 @@ olmoe_model_t *olmoe_model_load(const char *dir)
         return NULL;
     }
 
+    /* Hint for 2 MiB huge pages (THP). Must be set before the shard fread's
+     * fault the pages in, so the kernel allocates huge pages on first touch
+     * instead of collapsing 4 KiB pages later. MoE decode gathers ~24K
+     * scattered 4 KiB expert pages per token; 2 MiB pages collapse that to
+     * ~48 TLB entries. Non-fatal: on a kernel without THP the mapping just
+     * stays on 4 KiB pages. */
+    if (madvise(m, sizeof *m, MADV_HUGEPAGE) != 0)
+        perror("olmoe_model_load: madvise(MADV_HUGEPAGE) failed");
+
     for (size_t s = 0; s < OLMOE_N_SHARDS; ++s) {
         if (!load_shard(m, dir, s)) {
             free(m);
