@@ -108,13 +108,13 @@ make test
 You can build the main binary explicitly with:
 
 ```bash
-make          # produces build/main and build/test_runner
+make          # produces build/main, build/llmoe and build/test_runner
 ```
 
 ## Running the REPL
 
 ```bash
-./build/main models/OLMoE-1B-7B-0924-Instruct
+./build/llmoe models/OLMoE-1B-7B-0924-Instruct
 ```
 
 Type a prompt, press a key, and the model streams its reply (decoded tokens) to `stdout`; debug/timing info goes to `stderr`. On each turn it prints `speed: N tok/s`. Press Ctrl-C or Ctrl-D to exit.
@@ -149,7 +149,7 @@ The script filesystem-file fingerprint includes HW fingerprint (CPU name, cores/
 
 ## Last benchmark result
 
-Machine: **AMD Ryzen AI 9 HX 370** (12 physical cores / 24 threads), 32 GiB RAM (2× 5600 MT/s), CPU backend via `./build/main`.
+Machine: **AMD Ryzen AI 9 HX 370** (12 physical cores / 24 threads), 32 GiB RAM (2× 5600 MT/s), CPU backend via `./build/llmoe`.
 
 | commit | avg tokens/s | backend | cpu_cores_threads | ram_mb |
 |--------|--------------|---------|-------------------|--------|

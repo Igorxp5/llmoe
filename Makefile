@@ -39,6 +39,25 @@ PROJ_SRCS = $(shell find src -name '*.c' 2>/dev/null | sort)
 BUILD_DIR = ./build
 OBJS      = $(patsubst src/%.c,$(BUILD_DIR)/src/%.o,$(PROJ_SRCS))
 
+# ── Shell wrapper (build/llmoe) ─────────────────────────────────────────────
+# Sets OMP threading env before the binary starts; libgomp reads these at the
+# first parallel region and there is no runtime API to change them afterwards.
+WRAPPER = $(BUILD_DIR)/llmoe
+
+define LLMOE_WRAPPER
+#!/bin/sh
+# libgomp reads OMP_* from the environment at the first parallel region; there
+# is no runtime API to change them after startup. OMP_NUM_THREADS is pinned to
+# the physical-core count because nproc reports SMT logical threads. The 'cpu
+# cores' topology field is used instead of counting visible core ids, which
+# undercounts when CPUs are offline (e.g. 10 of 12 on the Ryzen AI 9 HX 370).
+OMP_NUM_THREADS=$$(awk -F':[ \t]*' '/^physical id/{pid=$$2} /^cpu cores/{cores[pid]=$$2} END{for (p in cores) s+=cores[p]; print s}' /proc/cpuinfo)
+export OMP_NUM_THREADS
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+exec "$$(dirname "$$0")/main" "$$@"
+endef
+
 TEST_SRCS = $(wildcard tests/*.c)
 TEST_OBJS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(TEST_SRCS))
 
@@ -60,7 +79,7 @@ MODEL_LAYOUT_INC  = src/olmoe/layers/model_layout.inc
 
 .PHONY: all clean distclean prepare test iree
 
-all: prepare $(TOKENIZER_INC) $(MODEL_LAYOUT_INC) $(IREE_STAMP) $(BUILD_DIR)/main
+all: prepare $(TOKENIZER_INC) $(MODEL_LAYOUT_INC) $(IREE_STAMP) $(BUILD_DIR)/main $(WRAPPER)
 
 prepare:
 	@mkdir -p $(BUILD_DIR) $(sort $(dir $(OBJS) $(TEST_OBJS)))
@@ -120,6 +139,10 @@ lst: $(LST_FILES) $(TEST_LST_FILES)
 $(BUILD_DIR)/main: $(OBJS) | $(IREE_STAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
+$(WRAPPER): $(BUILD_DIR)/main
+	$(file >$@,$(LLMOE_WRAPPER))
+	@chmod +x $@
+
 $(BUILD_DIR)/test_runner: $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OBJS)) | $(IREE_STAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_OBJS) $(filter-out $(BUILD_DIR)/src/main.o,$(OBJS)) $(LDLIBS)
 
@@ -130,7 +153,7 @@ test: prepare $(TOKENIZER_INC) $(MODEL_LAYOUT_INC) $(BUILD_DIR)/test_runner
 # ── Clean ───────────────────────────────────────────────────────────────────
 clean:
 	rm -rf $(BUILD_DIR)/*.o $(BUILD_DIR)/src $(BUILD_DIR)/tests
-	rm -f $(BUILD_DIR)/main $(BUILD_DIR)/test_runner
+	rm -f $(BUILD_DIR)/main $(BUILD_DIR)/test_runner $(WRAPPER)
 
 distclean:
 	rm -rf $(BUILD_DIR)

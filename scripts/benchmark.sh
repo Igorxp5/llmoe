@@ -85,7 +85,7 @@ trap 'rm -f "$out" "$err"' EXIT
 # stdout carries the generated text (asserted deterministic below), stderr
 # the load debug lines and the final speed report.
 status=0
-echo "$PROMPT" | timeout --signal INT --kill-after=5s "$TIMEOUT_SEC" ./build/main "$MODEL" > "$out" 2> "$err" || status=$?
+echo "$PROMPT" | timeout --signal INT --kill-after=5s "$TIMEOUT_SEC" ./build/llmoe "$MODEL" > "$out" 2> "$err" || status=$?
 
 if [ "$status" -ne 0 ]; then
     echo "ERROR: benchmark run failed (exit $status), stderr:" >&2
