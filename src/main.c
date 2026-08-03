@@ -60,6 +60,13 @@ static void teardown_session(olmoe_scratch_t *s, olmoe_token_id_t *tokens,
 
 int main(int argc, char **argv)
 {
+    /* Pin OMP threads to physical cores (no SMT) and keep them there across
+     * parallel regions. Thread count is left to OMP_NUM_THREADS/env defaults.
+     * OMP_PLACES has no runtime API, so it must go through the environment;
+     * libgomp reads it at the first parallel region, after main() starts. */
+    setenv("OMP_PLACES", "cores", 1);
+    setenv("OMP_PROC_BIND", "close", 1);
+
     if (argc != 2) return usage(argv[0]);
 
     int rc;
