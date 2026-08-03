@@ -133,6 +133,15 @@ void olmoe_v_proj_forward(const olmoe_self_attn_t * restrict a,
                           const olmoe_act_t * restrict x, size_t seq_len,
                           olmoe_act_t * restrict out);
 
+/* Fused q/k/v projections: the three [seq, hidden] matmuls share `x` and
+ * write disjoint buffers, so they run in one OpenMP region instead of the
+ * three fork/joins the per-kind forwards would spawn. q/k/v must not alias
+ * each other or `x`. */
+void olmoe_qkv_proj_forward(const olmoe_self_attn_t * restrict a,
+                            const olmoe_act_t * restrict x, size_t seq_len,
+                            olmoe_act_t * restrict q, olmoe_act_t * restrict k,
+                            olmoe_act_t * restrict v);
+
 /* OLMOE_KIND_O_PROJ: attn output @ o_proj^T -> [seq, hidden]. */
 void olmoe_o_proj_forward(const olmoe_self_attn_t * restrict a,
                           const olmoe_act_t * restrict x, size_t seq_len,

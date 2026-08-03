@@ -152,6 +152,57 @@ static int test_o_proj_matmul_matches_scalar(void)
     return failed;
 }
 
+/* Fill one [hidden, hidden] attn weight field with a base-specific value
+ * pattern so the three projections carry distinct weights (a cross-wired
+ * pointer in the fused path would then fail the lane comparison). */
+static int fill_weight_field(olmoe_bf16_t * restrict field, int base)
+{
+    size_t wn = (size_t)OLMOE_HIDDEN * OLMOE_HIDDEN;
+    olmoe_bf16_t *w = malloc(wn * sizeof *w);
+    if (!w) {
+        return 1;
+    }
+    for (size_t i = 0; i < wn; ++i)
+        w[i] = f32_to_bf16((float)(((int)(i % base) - base / 2) * 0.125f));
+    memcpy(field, w, wn * sizeof *w);
+    free(w);
+    return 0;
+}
+
+/* The fused q/k/v path must equal three independent scalar matmuls for all
+ * three projections: it reads the same input once and splits the work across
+ * one OpenMP region instead of three. */
+static int test_qkv_proj_fused_matches_scalar(void)
+{
+    enum { SEQ = 2 };
+    static olmoe_self_attn_t attn;
+
+    if (fill_weight_field(attn.q_proj, 17) ||
+        fill_weight_field(attn.k_proj, 19) ||
+        fill_weight_field(attn.v_proj, 23)) {
+        printf("FAIL: qkv weight malloc OOM\n");
+        return 1;
+    }
+
+    olmoe_act_t x[SEQ * OLMOE_HIDDEN];
+    for (size_t i = 0; i < SEQ * OLMOE_HIDDEN; ++i)
+        x[i] = (float)((int)(i % 11)) / 100.0f - 0.05f;
+
+    olmoe_act_t gq[SEQ * OLMOE_HIDDEN], gk[SEQ * OLMOE_HIDDEN];
+    olmoe_act_t gv[SEQ * OLMOE_HIDDEN], wq[SEQ * OLMOE_HIDDEN];
+    olmoe_act_t wk[SEQ * OLMOE_HIDDEN], wv[SEQ * OLMOE_HIDDEN];
+    olmoe_qkv_proj_forward(&attn, x, SEQ, gq, gk, gv);
+    scalar_matmul_bf16(wq, x, attn.q_proj, SEQ, OLMOE_HIDDEN, OLMOE_HIDDEN);
+    scalar_matmul_bf16(wk, x, attn.k_proj, SEQ, OLMOE_HIDDEN, OLMOE_HIDDEN);
+    scalar_matmul_bf16(wv, x, attn.v_proj, SEQ, OLMOE_HIDDEN, OLMOE_HIDDEN);
+
+    int failed = lanes_match(gq, wq, (size_t)SEQ * OLMOE_HIDDEN);
+    failed += lanes_match(gk, wk, (size_t)SEQ * OLMOE_HIDDEN);
+    failed += lanes_match(gv, wv, (size_t)SEQ * OLMOE_HIDDEN);
+    if (!failed) printf("PASS: fused qkv matmul matches scalar\n");
+    return failed;
+}
+
 int test_engine_matmul_pass(void)
 {
     int failed = 0;
@@ -160,5 +211,6 @@ int test_engine_matmul_pass(void)
     failed += test_k_proj_matmul_matches_scalar();
     failed += test_v_proj_matmul_matches_scalar();
     failed += test_o_proj_matmul_matches_scalar();
+    failed += test_qkv_proj_fused_matches_scalar();
     return failed;
 }

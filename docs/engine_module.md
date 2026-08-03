@@ -116,6 +116,11 @@ buffers; the remaining norms write into a separate `out`. The MoE
 router (`mlp_gate_forward`) writes both the top-K expert indices and the
 (softmax-normalized) weights.
 
+Besides the 1:1 table above, `engine_attn.c` exposes a fused
+`olmoe_qkv_proj_forward` used by the integrated forward path (see
+Orchestrator). The per-kind q/k/v forwards remain public: the 1:1 mapping
+is the unit-testable surface, and the fused call is its aggregate.
+
 ### Orchestrator
 
 ```c
@@ -138,7 +143,11 @@ intermediate storage: `embed -> [layer -> input_ln, q/k/v_proj, q/k_norm,
 RoPE q/k, causal/incremental SDPA, o_proj, residual, post_ln, mlp_gate,
 MoE top-K dispatch with SiLU gating and weighted down-projection,
 residual] -> final_norm -> lm_head -> logits`. The per-layer loop is
-driven by the baked `OLMOE_N_LAYERS` constant.
+driven by the baked `OLMOE_N_LAYERS` constant. The q/k/v projections run
+as a single fused call (`olmoe_qkv_proj_forward`) so the three matmuls
+share one OpenMP region — 2 fewer fork/joins per layer than three separate
+per-kind calls; `o_proj` stays separate because it consumes the SDPA
+output rather than the input hidden state.
 
 ## Topology constants
 
@@ -172,7 +181,8 @@ src/
         engine_internal.h    shared internal helpers (safe_array_size)
         engine_embed.c       embed + lm_head
         engine_norm.c        final / input / post / q / k norms
-        engine_attn.c        q / k / v / o projections
+        engine_attn.c        q / k / v / o projections + fused
+                             olmoe_qkv_proj_forward
         engine_mlp.c         mlp router + 3 expert weight ops
         engine_forward.c     olmoe_forward integrator + scratch_init / free,
                              attention_block, add_residual, MoE blocks

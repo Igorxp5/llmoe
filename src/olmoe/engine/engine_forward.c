@@ -151,9 +151,7 @@ static void attention_block(const olmoe_layer_t * restrict L,
                             olmoe_act_t * restrict out)
 {
     olmoe_input_ln_forward(L->input_layernorm, x, seq, s->ctx);
-    olmoe_q_proj_forward(&L->self_attn, s->ctx, seq, s->q);
-    olmoe_k_proj_forward(&L->self_attn, s->ctx, seq, s->k);
-    olmoe_v_proj_forward(&L->self_attn, s->ctx, seq, s->v);
+    olmoe_qkv_proj_forward(&L->self_attn, s->ctx, seq, s->q, s->k, s->v);
     olmoe_q_norm_forward(L->self_attn.q_norm, s->q, seq);
     olmoe_k_norm_forward(L->self_attn.k_norm, s->k, seq);
     cpu_rope(s->q, seq, pos, OLMOE_NUM_HEADS, OLMOE_HEAD_DIM, OLMOE_ROPE_THETA);
