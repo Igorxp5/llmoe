@@ -35,12 +35,15 @@ typedef struct {
     olmoe_expert_t experts[OLMOE_N_EXPERTS];
 } olmoe_layer_t;
 
-/* Loaded OLMoE model. One contiguous heap block (calloc'd by the loader);
- * every weight field is a zero-initialized array so there are no individual
- * mallocs or frees. The loader fread's shard bytes directly into the right
- * field offsets. Lifetime:
+/* Loaded OLMoE model. One contiguous anonymous mmap'd block (page-aligned,
+ * zero-initialized) backed by hugetlb 2 MiB pages when reserved, else plain
+ * 4 KiB pages; every weight field is a zero-initialized array so there are
+ * no individual mallocs or frees. The loader fread's shard bytes directly
+ * into the right field offsets, then mlock()s the region and mprotect()s it
+ * PROT_READ: the model is read-only and pinned, so the returned pointer is
+ * const. Lifetime:
  *
- *     olmoe_model_t *m = olmoe_model_load("/path/to/model_dir");
+ *     const olmoe_model_t *m = olmoe_model_load("/path/to/model_dir");
  *     ... read m->layers[i].self_attn.q_proj ...
  *     olmoe_model_free(m);
  */
@@ -55,18 +58,22 @@ typedef struct {
  * shards (the index and config are NOT read at runtime; their layout is
  * baked into the binary by scripts/generate_model_layout.py at build time).
  *
- * The returned struct is one calloc'd block (~12.9 GiB); weights are
- * written in place via fread. Returns NULL on any I/O or layout mismatch.
+ * The returned model is one anonymous mmap'd region (~12.9 GiB); weights are
+ * written in place via fread, then the region is mlock()'d and made
+ * read-only (mprotect PROT_READ), so the pointer is const and any write to
+ * it faults. Prefers hugetlb 2 MiB pages (requires reserved vm.nr_hugepages)
+ * and falls back to 4 KiB pages otherwise. Returns NULL on any I/O, layout
+ * mismatch, or mmap failure.
  *
  * Example:
- *     olmoe_model_t *m = olmoe_model_load("models/OLMoE-1B-7B-0924-Instruct");
+ *     const olmoe_model_t *m = olmoe_model_load("models/OLMoE-1B-7B-0924-Instruct");
  *     if (!m) { perror("load"); return 1; }
  *     ... use m->layers[0].self_attn.q_proj ...
  *     olmoe_model_free(m);
  */
-olmoe_model_t *olmoe_model_load(const char *dir);
+const olmoe_model_t *olmoe_model_load(const char *dir);
 
 /* Free a model returned by olmoe_model_load. NULL-safe. */
-void olmoe_model_free(olmoe_model_t *model);
+void olmoe_model_free(const olmoe_model_t *model);
 
 #endif /* OLMOE_LAYER_H */

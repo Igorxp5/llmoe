@@ -74,7 +74,7 @@ static int prepare_prompt(const char *line, olmoe_scratch_t *s,
     return 0;
 }
 
-static int prefill_and_first_token(olmoe_model_t *m, olmoe_scratch_t *s,
+static int prefill_and_first_token(const olmoe_model_t *m, olmoe_scratch_t *s,
                                    olmoe_token_id_t *tokens, size_t n_tok)
 {
     if (n_tok == 0) return EOS_TOKEN_ID;
@@ -104,7 +104,7 @@ static void stream_decoded_tokens(const olmoe_token_id_t *tokens,
     *dec_len = new_len;
 }
 
-static void decode_until_eos(olmoe_model_t *m, olmoe_scratch_t *s,
+static void decode_until_eos(const olmoe_model_t *m, olmoe_scratch_t *s,
                              olmoe_token_id_t *tokens, size_t n_tok,
                              size_t *output_tokens, size_t *dec_len)
 {
@@ -125,7 +125,7 @@ static void decode_until_eos(olmoe_model_t *m, olmoe_scratch_t *s,
     }
 }
 
-static void generate_response(olmoe_model_t *m, olmoe_scratch_t *s,
+static void generate_response(const olmoe_model_t *m, olmoe_scratch_t *s,
                               olmoe_token_id_t *tokens, size_t n_tok,
                               size_t *output_tokens, size_t *dec_len)
 {
@@ -149,7 +149,7 @@ static void finish_turn_response(size_t output_tokens, struct timespec gen_t0)
     stop_flag = 0;
 }
 
-static void run_turn(olmoe_model_t *m, olmoe_scratch_t *s,
+static void run_turn(const olmoe_model_t *m, olmoe_scratch_t *s,
                      olmoe_token_id_t *tokens, const char *line)
 {
     size_t n_tok;
@@ -165,7 +165,7 @@ static void run_turn(olmoe_model_t *m, olmoe_scratch_t *s,
     finish_turn_response(output_tokens, gen_t0);
 }
 
-void olmoe_repl_run(olmoe_model_t *m, olmoe_scratch_t *s,
+void olmoe_repl_run(const olmoe_model_t *m, olmoe_scratch_t *s,
                     olmoe_token_id_t *tokens)
 {
     char line[MAX_LINE];

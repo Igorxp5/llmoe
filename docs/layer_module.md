@@ -62,15 +62,19 @@ redundant with the compile-time constants). BF16 storage is a bare
 
 ## Lifetime and ownership
 
-The model is a single `calloc`'d block (~12.9 GiB, zero-initialized).
-Every weight field is a compile-time-sized array inside that block; the
-loader `fread`s shard bytes directly into the right field offset. There
-are no individual `malloc`s or per-tensor ownership tables.
-`olmoe_model_free(model)` does a single `free(model)` (NULL-safe).
+The model is a single anonymous `mmap`'d region (~12.9 GiB, zero-initialized,
+page-aligned), backed by hugetlb 2 MiB pages (`MAP_HUGETLB`) when the operator
+reserved huge pages (`vm.nr_hugepages`) and falling back to plain 4 KiB pages
+otherwise. Every weight field is a compile-time-sized array inside that
+region; the loader `fread`s shard bytes directly into the right field offset.
+There are no individual `malloc`s or per-tensor ownership tables.
+`olmoe_model_free(model)` does a single `munmap` (NULL-safe).
 
 On successful load the loader calls `mlock(model, sizeof *model)` so the
-~13 GiB of weight pages are pinned in RAM and cannot be swapped out;
-`olmoe_model_free` reverses this with `munlock` before `free`.
+~13 GiB of weight pages are pinned in RAM and cannot be swapped out, then
+`mprotect(PROT_READ)` seals the region read-only: the returned pointer is
+`const` and any write to the model faults with SIGSEGV. `olmoe_model_free`
+reverses this with `munlock` before `munmap`.
 
 ## Loading flow
 

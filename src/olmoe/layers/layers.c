@@ -4,12 +4,16 @@
  * The full tensor layout (which shard, which slot, which byte-count per
  * kind) is baked by scripts/generate_model_layout.py and embedded here via
  * layers.h. At runtime this file just:
- *   1. allocates one `olmoe_model_t` via calloc (~12.9 GiB, zero-init'd),
+ *   1. mmaps one ~12.9 GiB anonymous region (zero-init'd, page-aligned),
+ *      preferring hugetlb 2 MiB pages (MAP_HUGETLB) and falling back to
+ *      plain 4 KiB pages when no huge pages are reserved,
  *   2. opens each shard listed in OLMOE_SHARD_FILE_NAMES (in order),
  *   3. skips the 8-byte LE header-length + JSON header,
  *   4. walks OLMOE_SHARD_LAYOUT[shard] and fread()s `bytes_for_kind(kind)`
  *      bytes directly into the array-field at the right offset,
- *   5. returns the populated struct (or NULL + free on any error).
+ *   5. mlock()s the weights and mprotect()s the region PROT_READ so the
+ *      loaded model is pinned and cannot be written, then returns it
+ *      (or NULL + munmap on any error).
  *
  * Rationale (no runtime JSON): see docs/layer_module.md.
  */
@@ -20,6 +24,15 @@
 #include <sys/mman.h>
 
 #include "olmoe/layers/layers.h"
+
+/* Length of the model mapping. MAP_HUGETLB requires the length to be a
+ * huge-page multiple, and mprotect/munmap must use the exact same length as
+ * mmap, so round sizeof(olmoe_model_t) up to the x86_64 default hugetlb
+ * page (2 MiB) once. The sub-2 MiB tail beyond sizeof *m is mapped but
+ * never written. */
+#define OLMOE_MODEL_MAP_BYTES \
+    (((sizeof(olmoe_model_t) + (2U * 1024 * 1024) - 1) / (2U * 1024 * 1024)) \
+     * (2U * 1024 * 1024))
 
 /* Bytes of one BF16 tensor of `kind`, derived from the baked dim
  * constants. Kept here (not in layer.h) because it is loader-internal.
@@ -172,32 +185,36 @@ static int load_shard(olmoe_model_t *m, const char *dir,
     return 1;
 }
 
-olmoe_model_t *olmoe_model_load(const char *dir)
+const olmoe_model_t *olmoe_model_load(const char *dir)
 {
     if (!dir) {
         fprintf(stderr, "olmoe_model_load: NULL dir\n");
         return NULL;
     }
 
-    olmoe_model_t *m = calloc(1, sizeof *m);
-    if (!m) {
-        fprintf(stderr, "olmoe_model_load: calloc(%zu) failed\n",
-                sizeof *m);
-        return NULL;
+    /* Prefer hugetlb 2 MiB pages: the ~24K scattered 4 KiB expert pages a
+     * MoE decode gathers per token collapse to ~48 TLB entries. Requires
+     * pre-reserved huge pages (vm.nr_hugepages); otherwise fall back to a
+     * plain anonymous mapping so the model still loads. MAP_ANONYMOUS
+     * zero-initializes the region, preserving calloc's semantics. */
+    olmoe_model_t *m = mmap(NULL, OLMOE_MODEL_MAP_BYTES,
+                            PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+                            -1, 0);
+    if (m == MAP_FAILED) {
+        perror("olmoe_model_load: mmap(MAP_HUGETLB) failed");
+        m = mmap(NULL, OLMOE_MODEL_MAP_BYTES, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (m == MAP_FAILED) {
+            fprintf(stderr, "olmoe_model_load: mmap(%zu) failed\n",
+                    OLMOE_MODEL_MAP_BYTES);
+            return NULL;
+        }
     }
-
-    /* Hint for 2 MiB huge pages (THP). Must be set before the shard fread's
-     * fault the pages in, so the kernel allocates huge pages on first touch
-     * instead of collapsing 4 KiB pages later. MoE decode gathers ~24K
-     * scattered 4 KiB expert pages per token; 2 MiB pages collapse that to
-     * ~48 TLB entries. Non-fatal: on a kernel without THP the mapping just
-     * stays on 4 KiB pages. */
-    if (madvise(m, sizeof *m, MADV_HUGEPAGE) != 0)
-        perror("olmoe_model_load: madvise(MADV_HUGEPAGE) failed");
 
     for (size_t s = 0; s < OLMOE_N_SHARDS; ++s) {
         if (!load_shard(m, dir, s)) {
-            free(m);
+            munmap(m, OLMOE_MODEL_MAP_BYTES);
             return NULL;
         }
     }
@@ -205,13 +222,20 @@ olmoe_model_t *olmoe_model_load(const char *dir)
     if (mlock(m, sizeof *m) != 0)
         perror("olmoe_model_load: mlock failed, weights may be swappable");
 
+    /* Seal the weights read-only: the engine API is all const and no runtime
+     * code writes the model, so any accidental write now faults (SIGSEGV)
+     * instead of silently corrupting weights. */
+    if (mprotect(m, OLMOE_MODEL_MAP_BYTES, PROT_READ) != 0)
+        perror("olmoe_model_load: mprotect(PROT_READ) failed, "
+               "model stays writable");
+
     return m;
 }
 
-void olmoe_model_free(olmoe_model_t *model)
+void olmoe_model_free(const olmoe_model_t *model)
 {
     if (model) {
         munlock(model, sizeof *model);
-        free(model);
+        munmap(model, OLMOE_MODEL_MAP_BYTES);
     }
 }

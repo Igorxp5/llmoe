@@ -14,12 +14,12 @@ static int usage(const char *prog)
     return 1;
 }
 
-static olmoe_model_t *load_model(const char *dir)
+static const olmoe_model_t *load_model(const char *dir)
 {
     fprintf(stderr, "[debug] Loading model from %s\n", dir);
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    olmoe_model_t *m = olmoe_model_load(dir);
+    const olmoe_model_t *m = olmoe_model_load(dir);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     if (!m) {
         fprintf(stderr, "Failed to load model from %s\n", dir);
@@ -31,7 +31,7 @@ static olmoe_model_t *load_model(const char *dir)
     return m;
 }
 
-static int init_session(olmoe_model_t **m_out, olmoe_scratch_t *s,
+static int init_session(const olmoe_model_t **m_out, olmoe_scratch_t *s,
                         olmoe_token_id_t **tokens_out, const char *model_dir)
 {
     *m_out = load_model(model_dir);
@@ -51,7 +51,7 @@ static int init_session(olmoe_model_t **m_out, olmoe_scratch_t *s,
 }
 
 static void teardown_session(olmoe_scratch_t *s, olmoe_token_id_t *tokens,
-                             olmoe_model_t *m)
+                             const olmoe_model_t *m)
 {
     olmoe_scratch_free(s);
     free(tokens);
@@ -70,7 +70,7 @@ int main(int argc, char **argv)
     if (argc != 2) return usage(argv[0]);
 
     int rc;
-    olmoe_model_t *m = NULL;
+    const olmoe_model_t *m = NULL;
     olmoe_scratch_t s = {0};
     olmoe_token_id_t *tokens = NULL;
 

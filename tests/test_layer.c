@@ -344,7 +344,7 @@ int test_layer_loads_and_validates(void)
     const char *dir = resolve_model_dir();
     printf("--- layer tests (model dir: %s) ---\n", dir);
 
-    olmoe_model_t *m = olmoe_model_load(dir);
+    const olmoe_model_t *m = olmoe_model_load(dir);
     if (!m) {
         printf("FAIL: olmoe_model_load returned NULL for %s\n", dir);
         return 1;
