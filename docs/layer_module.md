@@ -76,6 +76,46 @@ On successful load the loader calls `mlock(model, sizeof *model)` so the
 `const` and any write to the model faults with SIGSEGV. `olmoe_model_free`
 reverses this with `munlock` before `munmap`.
 
+## Operator guide: reserving 2 MiB huge pages
+
+The kernel keeps zero huge pages by default (`HugePages_Total: 0` in
+`/proc/meminfo`), so on a fresh boot the loader logs
+`mmap(MAP_HUGETLB) failed: Cannot allocate memory` and falls back to plain
+4 KiB pages — the model still loads and stays read-only, it just lacks the
+2 MiB backing. To get real hugetlb pages an operator must reserve them first.
+
+The model map needs `ceil(12.9 GiB / 2 MiB) = 6605` pages; reserve ~6800 to
+leave slack (the IREE runtime also probes hugetlb memfds).
+
+Reserve now (runtime only, lost on reboot):
+
+    echo 6800 | sudo tee /proc/sys/vm/nr_hugepages
+    # or: sudo sysctl -w vm.nr_hugepages=6800
+
+Verify before running the loader:
+
+    grep -i huge /proc/meminfo    # HugePages_Total / HugePages_Free == 6800
+
+Persist across reboot (modern distros):
+
+    echo 'vm.nr_hugepages=6800' | sudo tee /etc/sysctl.d/99-hugepages.conf
+    sudo sysctl --system
+
+(Old distros: append `vm.nr_hugepages=6800` to `/etc/sysctl.conf` instead.)
+
+Caveats:
+
+  - The 6800 x 2 MiB = 13.3 GiB pool is carved out of RAM and unusable by
+    normal processes; make sure the machine has RAM for the model (12.9 GiB),
+    the pool, and the OS.
+  - If the `sysctl` write fails with "cannot allocate memory", the kernel
+    could not find enough contiguous 2 MiB blocks: run `sync`, then
+    `echo 3 | sudo tee /proc/sys/vm/drop_caches`, and retry with a lower
+    count.
+  - The loader `mlock()`s the region, so also confirm the memlock rlimit
+    (`ulimit -l`) covers it; a low `RLIMIT_MEMLOCK` fails the mlock even with
+    huge pages reserved.
+
 ## Loading flow
 
 Per shard (`src/olmoe/layers/layers.c`):

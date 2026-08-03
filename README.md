@@ -162,7 +162,7 @@ The value is the average of the 13 runs recorded for that commit. Full history l
 Design notes live in `docs/`:
 
 - `engine_module.md` — the forward-pass engine and kernels architecture
-- `layer_module.md` — the safetensors loader / model layout
+- `layer_module.md` — the safetensors loader / model layout, including an operator guide for reserving 2 MiB huge pages (`vm.nr_hugepages`)
 - `moe_expert_accumulate_race.md` — notes on the MoE decode accumulation
 
 ## License
