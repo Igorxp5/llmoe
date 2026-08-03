@@ -37,10 +37,12 @@ detect_cpu_name() {
 }
 
 detect_cores_threads() {
-    # e.g. "12c/24t": physical cores and logical threads from /proc/cpuinfo.
+    # e.g. "12c/16t": physical cores and online logical threads from
+    # /proc/cpuinfo (which lists only CPUs currently online; the `siblings`
+    # field counts offlined threads too).
     local cores threads
     cores=$(awk '/^cpu cores/{print $4; exit}' /proc/cpuinfo)
-    threads=$(awk '/^siblings/{print $3; exit}' /proc/cpuinfo)
+    threads=$(grep -c '^processor' /proc/cpuinfo)
     echo "${cores}c/${threads}t"
 }
 
