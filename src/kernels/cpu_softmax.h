@@ -53,27 +53,43 @@ static inline __attribute__((always_inline)) void cpu_softmax_row_norm(float * r
         output[r] /= sum;
 }
 
-/* Deterministic reduce of per-thread partial sums: 16-lane AVX-512 chunks
- * are accumulated with _mm512_add_ps, reduced with _mm512_reduce_add_ps in
- * a fixed order, then the scalar tail is folded in ascending index. */
-static inline __attribute__((always_inline)) float cpu_softmax_sum_partials(
-    const float * restrict partial_sums, size_t nthreads)
+/* Fixed-order AVX-512 sum over `n` floats: 16-lane chunks are accumulated
+ * with _mm512_add_ps, reduced with _mm512_reduce_add_ps in a fixed order,
+ * then the scalar tail is folded in ascending index. Folds either per-thread
+ * partial sums (parallel path) or a full-dim exp row (serial path). */
+static inline __attribute__((always_inline)) float cpu_softmax_vec_sum(
+    const float * restrict vals, size_t n)
 {
     size_t r = 0;
     __m512 vsum = _mm512_setzero_ps();
-    for (; r + 16 <= nthreads; r += 16)
-        vsum = _mm512_add_ps(vsum, _mm512_loadu_ps(partial_sums + r));
+    for (; r + 16 <= n; r += 16)
+        vsum = _mm512_add_ps(vsum, _mm512_loadu_ps(vals + r));
     float sum = _mm512_reduce_add_ps(vsum);
-    if (__builtin_expect(r < nthreads, 0))
-        for (; r < nthreads; ++r)
-            sum += partial_sums[r];
+    if (__builtin_expect(r < n, 0))
+        for (; r < n; ++r)
+            sum += vals[r];
     return sum;
 }
 
-static inline void cpu_softmax(float * restrict output,
-                              const float * restrict input, size_t dim)
+/* Serial exp + fixed-order sum for small dims: no fork/join, just a
+ * streaming expf store folded by cpu_softmax_vec_sum. Router logits
+ * (64 elements) take this path every layer. */
+static inline float cpu_softmax_exp_sum_serial(float * restrict output,
+                                               const float * restrict input,
+                                               float mx, size_t dim)
 {
-    float mx = cpu_softmax_row_max(input, dim);
+    for (size_t r = 0; r < dim; ++r)
+        output[r] = expf(input[r] - mx);
+    return cpu_softmax_vec_sum(output, dim);
+}
+
+/* Multi-thread exp + partial-sum for large dims: each thread owns a static
+ * contiguous chunk, its partial lands in partial_sums, folded in fixed
+ * order by cpu_softmax_vec_sum. */
+static inline float cpu_softmax_exp_sum_parallel(float * restrict output,
+                                                 const float * restrict input,
+                                                 float mx, size_t dim)
+{
     int nthreads = omp_get_max_threads();
     float partial_sums[nthreads];
     for (int t = 0; t < nthreads; ++t)
@@ -89,7 +105,25 @@ static inline void cpu_softmax(float * restrict output,
         }
         partial_sums[tid] = partial;
     }
-    float sum = cpu_softmax_sum_partials(partial_sums, (size_t)nthreads);
+    return cpu_softmax_vec_sum(partial_sums, (size_t)nthreads);
+}
+
+/* Stable softmax with a small-dim fast path: a fork/join for the 64 router
+ * logits costs more than the whole computation, so dims at or below
+ * CPU_SOFTMAX_SERIAL_DIM use the serial AVX-512 path; larger dims fall back
+ * to the multi-thread path. Both paths sum in a fixed order, so the result
+ * is deterministic regardless of thread count. */
+#define CPU_SOFTMAX_SERIAL_DIM 256
+
+static inline void cpu_softmax(float * restrict output,
+                               const float * restrict input, size_t dim)
+{
+    float mx = cpu_softmax_row_max(input, dim);
+    float sum;
+    if (__builtin_expect(dim <= CPU_SOFTMAX_SERIAL_DIM, 1))
+        sum = cpu_softmax_exp_sum_serial(output, input, mx, dim);
+    else
+        sum = cpu_softmax_exp_sum_parallel(output, input, mx, dim);
     cpu_softmax_row_norm(output, dim, sum);
 }
 
