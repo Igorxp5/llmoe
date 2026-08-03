@@ -153,9 +153,9 @@ Machine: **AMD Ryzen AI 9 HX 370** (12 physical cores / 24 threads), 32 GiB RAM 
 
 | commit | avg tokens/s | backend | cpu_cores_threads | ram_mb |
 |--------|--------------|---------|-------------------|--------|
-| `15878ac` | **25.17** | CPU | 12c/16t | 36864 |
+| `49a9b48` | **27.39** | CPU | 12c/16t | 36864 |
 
-The value is the average of the 5 runs recorded for that commit. Full history lives in `benchmarks/metrics.csv`. The benchmark harness writes the system fingerprint line each run.
+The value is the average of the 8 runs recorded for that commit. Full history lives in `benchmarks/metrics.csv`. The benchmark harness writes the system fingerprint line each run.
 
 ## Documentation
 
